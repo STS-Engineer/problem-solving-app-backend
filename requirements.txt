@@ -3,5 +3,12 @@ uvicorn[standard]
 sqlalchemy
 alembic
 psycopg2-binary
+pydantic
 pydantic-settings
 python-dotenv
+openai
+httpx
+requests
+tiktoken
+regex
+tqdm
