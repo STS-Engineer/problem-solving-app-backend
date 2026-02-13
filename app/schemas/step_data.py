@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from datetime import date
+from datetime import date as dt_date
 # ============================================================================
 # D1 - Establish the Team
 # ============================================================================
@@ -71,86 +71,80 @@ class D2Data(BaseModel):
 # ============================================================================
 # D3 - Develop Interim Containment Action
 # ============================================================================
-class DefectedPartStatus(BaseModel):
-    """Statut des pièces défectueuses"""
-    is_returned: bool = Field(False, description="Retourné ?")
-    is_isolated: bool = Field(False, description="Isolé ?")
-    isolation_location: Optional[str] = Field(None, description="Lieu d'isolation")
-    is_identified: bool = Field(False, description="Identifié pour éviter mauvaise manipulation ?")
-    identification_method: Optional[str] = Field(None, description="Méthode d'identification")
+class  DefectedPartStatus(BaseModel):
+    """Status of defected parts"""
+    returned: bool = Field(False, description="Returned?")
+    isolated: bool = Field(False, description="Isolated?")
+    isolated_location: Optional[str] = Field(None, description="Isolation location")
+    identified: bool = Field(False, description="Identified to avoid mishandling?")
+    identified_method: Optional[str] = Field(None, description="Identification method")
 
-class SuspectedPartsLocation(BaseModel):
-    """Statut des pièces suspectes par localisation"""
-    location: str = Field(..., description="Localisation (Supplier site|In Transit|Production floor|Warehouse|Customer site|Others)")
-    inventory: Optional[str] = Field(None, description="Inventaire/Quantité")
-    actions: Optional[str] = Field(None, description="Actions prises")
-    leader: Optional[str] = Field(None, description="Responsable")
-    results: Optional[str] = Field(None, description="Résultats/Statut")
+class SuspectedPartsRow(BaseModel):
+    """Suspected parts by location"""
+    location: str = Field(..., description="Location (supplier_site|in_transit|production_floor|warehouse|customer_site|others)")
+    inventory: Optional[str] = Field(None, description="Inventory/Quantity")
+    actions: Optional[str] = Field(None, description="Actions taken")
+    leader: Optional[str] = Field(None, description="Leader")
+    results: Optional[str] = Field(None, description="Results/Status")
 
-class AlertCommunication(BaseModel):
-    """Communication des alertes"""
+class AlertCommunicatedTo(BaseModel):
+    """Alert communication"""
     production_shift_leaders: bool = Field(False)
     quality_control: bool = Field(False)
     warehouse: bool = Field(False)
     maintenance: bool = Field(False)
     customer_contact: bool = Field(False)
     production_planner: bool = Field(False)
-    alert_reference: Optional[str] = Field(None, description="Alert # (QRQC log or NCR #)")
 
 class RestartProduction(BaseModel):
-    """Redémarrage de la production"""
-    when: Optional[str] = Field(None, description="Quand (Date, Time, Lot)")
-    first_certified_lot: Optional[str] = Field(None, description="Premier lot certifié")
-    approved_by: Optional[str] = Field(None, description="Approuvé par")
-    method: Optional[str] = Field(None, description="Méthode de vérification")
-    identification_description: Optional[str] = Field(
-        None, 
-        description="Description identification pièces et cartons"
-    )
+    """Production restart"""
+    when: Optional[str] = Field(None, description="When (Date, Time, Lot)")
+    first_certified_lot: Optional[str] = Field(None, description="First certified lot")
+    approved_by: Optional[str] = Field(None, description="Approved by")
+    method: Optional[str] = Field(None, description="Verification method")
+    identification: Optional[str] = Field(None, description="Parts and boxes identification")
 
 class D3Data(BaseModel):
-    """Structure de données pour l'étape D3 - Interim Containment"""
-    # Section I - Defected Part Status
-    defected_part_status: Optional[DefectedPartStatus] = None
-    
-    # Section II - Suspected Parts Status
-    suspected_parts_locations: List[SuspectedPartsLocation] = Field(
+    """D3 - Interim Containment data structure"""
+    defected_part_status: DefectedPartStatus
+    suspected_parts_status: List[SuspectedPartsRow] = Field(
         default_factory=list,
-        description="Statut des pièces suspectes par localisation"
+        description="Suspected parts status by location"
     )
-    
-    # Section III - Alert Communicated
-    alert_communication: Optional[AlertCommunication] = None
-    
-    # Section IV - Restart Production
-    restart_production: Optional[RestartProduction] = None
-    
-    # Section V - Containment Responsible
+    alert_communicated_to: AlertCommunicatedTo
+    alert_number: Optional[str] = Field(None, description="Alert # (QRQC log or NCR #)")
+    restart_production: RestartProduction
     containment_responsible: Optional[str] = Field(
         None, 
-        description="Responsable du confinement"
+        description="Containment responsible"
     )
 
 
 # ============================================================================
 # D4 - Determine Root Cause
 # ============================================================================
+class FourMRow(BaseModel):
+    """Single row in 4M table (A1, E1, C1, N1, S1)"""
+    material: Optional[str] = Field(None, description="Material cause")
+    method: Optional[str] = Field(None, description="Method cause")
+    machine: Optional[str] = Field(None, description="Machine cause")
+    manpower: Optional[str] = Field(None, description="Manpower cause")
+    environment: Optional[str] = Field(None, description="Environment cause")
+
 class FourMEnvironment(BaseModel):
-    """4M + Environment pour analyse cause racine"""
-    material: List[str] = Field(default_factory=list, description="Causes liées au Matériel")
-    method: List[str] = Field(default_factory=list, description="Causes liées à la Méthode")
-    machine: List[str] = Field(default_factory=list, description="Causes liées à la Machine")
-    manpower: List[str] = Field(default_factory=list, description="Causes liées à la Main d'œuvre")
-    environment: List[str] = Field(default_factory=list, description="Causes liées à l'Environnement")
-    selected_problem: Optional[str] = Field(None, description="Cause racine sélectionnée")
+    """4M + Environment analysis with 3 rows + selected problem"""
+    row_1: Optional[FourMRow] = None
+    row_2: Optional[FourMRow] = None
+    row_3: Optional[FourMRow] = None
+    selected_problem: Optional[str] = Field(None, description="Selected root cause")
 
 class FiveWhyItem(BaseModel):
-    """Un élément de l'analyse 5 Why"""
-    question: Optional[str] = Field(None, description="Question Why")
-    answer: Optional[str] = Field(None, description="Réponse")
+    """Single Why analysis item"""
+    question: Optional[str] = Field(None, description="Why question")
+    answer: Optional[str] = Field(None, description="Answer")
 
 class FiveWhys(BaseModel):
-    """Analyse 5 Why"""
+    """5 Why analysis"""
     why_1: Optional[FiveWhyItem] = None
     why_2: Optional[FiveWhyItem] = None
     why_3: Optional[FiveWhyItem] = None
@@ -158,40 +152,17 @@ class FiveWhys(BaseModel):
     why_5: Optional[FiveWhyItem] = None
 
 class RootCauseConclusion(BaseModel):
-    """Conclusion de la cause racine"""
-    root_cause: Optional[str] = Field(None, description="Cause racine identifiée")
-    validation_method: Optional[str] = Field(None, description="Comment a-t-elle été validée ?")
+    """Root cause conclusion"""
+    root_cause: Optional[str] = Field(None, description="Identified root cause")
+    validation_method: Optional[str] = Field(None, description="How was it validated?")
 
 class D4Data(BaseModel):
-    """Structure de données pour l'étape D4 - Root Cause Analysis"""
-    # Section I - 4M + Environment OCCURRENCE
-    four_m_occurrence: Optional[FourMEnvironment] = Field(
-        None, 
-        description="Analyse 4M+Environment pour l'occurrence"
-    )
-    
-    # Section II - 5 Whys OCCURRENCE
-    five_whys_occurrence: Optional[FiveWhys] = Field(
-        None, 
-        description="Analyse 5 Why pour l'occurrence"
-    )
-    
-    # Section III - Root Cause for Occurrence
+    """D4 - Root Cause Analysis data structure"""
+    four_m_occurrence: Optional[FourMEnvironment] = None
+    five_whys_occurrence: Optional[FiveWhys] = None
     root_cause_occurrence: Optional[RootCauseConclusion] = None
-    
-    # Section IV - 4M + Environment NON-DETECTION
-    four_m_non_detection: Optional[FourMEnvironment] = Field(
-        None, 
-        description="Analyse 4M+Environment pour la non-détection"
-    )
-    
-    # Section V - 5 Whys NON-DETECTION
-    five_whys_non_detection: Optional[FiveWhys] = Field(
-        None, 
-        description="Analyse 5 Why pour la non-détection"
-    )
-    
-    # Section VI - Root Cause for NON-DETECTION
+    four_m_non_detection: Optional[FourMEnvironment] = None
+    five_whys_non_detection: Optional[FiveWhys] = None
     root_cause_non_detection: Optional[RootCauseConclusion] = None
 
 
@@ -199,25 +170,22 @@ class D4Data(BaseModel):
 # D5 - Choose and Verify Permanent Corrective Actions
 # ============================================================================
 class CorrectiveAction(BaseModel):
-    """Action corrective (occurrence ou détection)"""
-    action: str = Field(..., description="Description de l'action")
-    responsible: str = Field(..., description="Responsable")
-    due_date: Optional[date] = Field(None, description="Date d'échéance")
-    implementation_date: Optional[date] = Field(None, alias="imp_date", description="Date de mise en œuvre")
-    evidence: Optional[str] = Field(None, description="Preuve/référence")
+    """Corrective action item"""
+    action: Optional[str] = Field(None, description="Action description")
+    responsible: Optional[str] = Field(None, description="Responsible person")
+    due_date: Optional[str] = Field(None, description="Due date")
+    imp_date: Optional[str] = Field(None, description="Implementation date")
+    evidence: Optional[str] = Field(None, description="Evidence reference")
 
 class D5Data(BaseModel):
-    """Structure de données pour l'étape D5 - Corrective Actions"""
-    # Section I - Corrective Action for Occurrence
+    """D5 - Corrective Actions data structure"""
     corrective_actions_occurrence: List[CorrectiveAction] = Field(
         default_factory=list,
-        description="Actions correctives pour l'occurrence"
+        description="Corrective actions for occurrence"
     )
-    
-    # Section II - Corrective Action for Detection
     corrective_actions_detection: List[CorrectiveAction] = Field(
         default_factory=list,
-        description="Actions correctives pour la détection"
+        description="Corrective actions for detection"
     )
 
 
@@ -225,29 +193,32 @@ class D5Data(BaseModel):
 # D6 - Implement Permanent Corrective Actions
 # ============================================================================
 class ImplementationMonitoring(BaseModel):
-    """Suivi de la mise en œuvre"""
-    monitoring_interval: Optional[str] = Field(None, description="Intervalle de surveillance")
-    pieces_produced: Optional[int] = Field(None, description="Nombre de pièces produites")
-    rejection_rate: Optional[float] = Field(None, description="Taux de rejet (%)")
-    audited_by: Optional[str] = Field(None, description="Audité par")
-    audit_date: Optional[date] = Field(None, description="Date d'audit")
-    shift_1_data: Optional[str] = Field(None, description="Données Shift 1")
-    shift_2_data: Optional[str] = Field(None, description="Données Shift 2")
+    """Implementation monitoring"""
+    monitoring_interval: Optional[str] = Field(None, description="Monitoring interval of time")
+    pieces_produced: Optional[int] = Field(None, description="Number of pieces produced")
+    rejection_rate: Optional[float] = Field(None, description="Rejection rate (%)")
+    audited_by: Optional[str] = Field(None, description="Audited by (name and title)")
+    audit_date: Optional[str] = Field(None, description="Audit date")
+    shift_1_data: Optional[str] = Field(None, description="Shift 1 data")
+    shift_2_data: Optional[str] = Field(None, description="Shift 2 data")
 
 class ImplementationChecklistItem(BaseModel):
-    """Item de la checklist d'implémentation"""
-    question: str = Field(..., description="Question de vérification")
-    checked: bool = Field(False, description="Vérifié ?")
+    """Implementation checklist item"""
+    question: str = Field(..., description="Verification question")
+    checked: bool = Field(False, description="Checked?")
+    shift_1: bool = Field(False, description="Shift 1 verification")
+    shift_2: bool = Field(False, description="Shift 2 verification")
+    shift_3: bool = Field(False, description="Shift 3 verification")
 
 class D6Data(BaseModel):
-    """Structure de données pour l'étape D6 - Implementation"""
-    # Section II - Implementation & Effectiveness Check - Monitoring
-    monitoring: Optional[ImplementationMonitoring] = None
-    
-    # Section III - Implementation Checklist
+    """D6 - Implementation & Effectiveness Check data structure"""
+    monitoring: Optional[ImplementationMonitoring] = Field(
+        None,
+        description="Section II - Implementation monitoring data"
+    )
     checklist: List[ImplementationChecklistItem] = Field(
         default_factory=list,
-        description="Checklist d'implémentation"
+        description="Section III - Implementation verification checklist"
     )
 
 
@@ -255,122 +226,65 @@ class D6Data(BaseModel):
 # D7 - Prevent Recurrence
 # ============================================================================
 class RecurrenceRisk(BaseModel):
-    """Risque de récurrence ailleurs"""
-    area_line_product: Optional[str] = Field(None, description="Zone/Ligne/Produit")
-    similar_risk_present: Optional[str] = Field(
-        None, 
-        description="Risque similaire présent ? (yes|no|unknown)"
-    )
-    action_taken: Optional[str] = Field(None, description="Action prise")
-
-from datetime import date as dt_date
+    """Risk of recurrence elsewhere"""
+    area_line_product: Optional[str] = Field(None, description="Area/Line/Product")
+    similar_risk_present: Optional[str] = Field(None, description="yes|no|unknown")
+    action_taken: Optional[str] = Field(None, description="Action taken")
 
 class LessonLearningDissemination(BaseModel):
-    audience_team: Optional[str] = Field(None, description="Audience/Équipe")
-    method: Optional[str] = Field(None, description="Méthode (Meeting, LLC, Email)")
-    date: Optional[dt_date] = Field(None, description="Date")
-    owner: Optional[str] = Field(None, description="Responsable")
-    evidence: Optional[str] = Field(None, description="Preuve")
-
+    """Lesson learning dissemination"""
+    audience_team: Optional[str] = Field(None, description="Audience/Team")
+    method: Optional[str] = Field(None, description="Method (Meeting, LLC, Email)")
+    date: Optional[str] = Field(None, description="Date")
+    owner: Optional[str] = Field(None, description="Owner")
+    evidence: Optional[str] = Field(None, description="Evidence")
 
 class ReplicationValidation(BaseModel):
-    """Validation de la réplication"""
-    line_site: Optional[str] = Field(None, description="Ligne/Site")
-    action_replicated: Optional[str] = Field(None, description="Action répliquée")
-    confirmation_method: Optional[str] = Field(None, description="Méthode de confirmation")
-    confirmed_by: Optional[str] = Field(None, description="Confirmé par")
+    """Replication validation"""
+    line_site: Optional[str] = Field(None, description="Line/Site")
+    action_replicated: Optional[str] = Field(None, description="Action replicated")
+    confirmation_method: Optional[str] = Field(None, description="Confirmation method")
+    confirmed_by: Optional[str] = Field(None, description="Confirmed by")
 
 class KnowledgeBaseUpdate(BaseModel):
-    """Mise à jour de la base de connaissances"""
-    document_type: Optional[str] = Field(None, description="Type de document")
-    topic_reference: Optional[str] = Field(None, description="Sujet/Référence")
-    owner: Optional[str] = Field(None, description="Responsable")
-    location_link: Optional[str] = Field(None, description="Localisation/Lien")
+    """Knowledge base update"""
+    document_type: Optional[str] = Field(None, description="Document type")
+    topic_reference: Optional[str] = Field(None, description="Topic/Reference")
+    owner: Optional[str] = Field(None, description="Owner")
+    location_link: Optional[str] = Field(None, description="Location/Link")
 
 class LongTermMonitoring(BaseModel):
-    """Surveillance à long terme"""
-    checkpoint_type: Optional[str] = Field(None, description="Type de point de contrôle")
-    frequency: Optional[str] = Field(None, description="Fréquence")
-    owner: Optional[str] = Field(None, description="Responsable")
-    start_date: Optional[date] = Field(None, description="Date de début")
+    """Long-term monitoring"""
+    checkpoint_type: Optional[str] = Field(None, description="Checkpoint type")
+    frequency: Optional[str] = Field(None, description="Frequency")
+    owner: Optional[str] = Field(None, description="Owner")
+    start_date: Optional[str] = Field(None, description="Start date")
     notes: Optional[str] = Field(None, description="Notes")
 
 class D7Data(BaseModel):
-    """Structure de données pour l'étape D7 - Prevention & Replication"""
-    # Section I - Risk of Recurrence Elsewhere
-    recurrence_risks: List[RecurrenceRisk] = Field(
-        default_factory=list,
-        description="Risques de récurrence ailleurs"
-    )
-    
-    # Section II - Lesson Learning Dissemination
-    lesson_disseminations: List[LessonLearningDissemination] = Field(
-        default_factory=list,
-        description="Diffusions des leçons apprises"
-    )
-    
-    # Section III - Replication Validation
-    replication_validations: List[ReplicationValidation] = Field(
-        default_factory=list,
-        description="Validations de réplication"
-    )
-    
-    # Section IV - Knowledge Base Update
-    knowledge_base_updates: List[KnowledgeBaseUpdate] = Field(
-        default_factory=list,
-        description="Mises à jour de la base de connaissances"
-    )
-    
-    # Section V - Long-Term Monitoring
-    long_term_monitoring: List[LongTermMonitoring] = Field(
-        default_factory=list,
-        description="Surveillance à long terme"
-    )
-    
-    # Section VI - LL Conclusion
-    ll_conclusion: Optional[str] = Field(
-        None, 
-        description="Conclusion des leçons apprises"
-    )
+    """D7 - Prevention & Replication data structure"""
+    recurrence_risks: List[RecurrenceRisk] = Field(default_factory=list)
+    lesson_disseminations: List[LessonLearningDissemination] = Field(default_factory=list)
+    replication_validations: List[ReplicationValidation] = Field(default_factory=list)
+    knowledge_base_updates: List[KnowledgeBaseUpdate] = Field(default_factory=list)
+    long_term_monitoring: List[LongTermMonitoring] = Field(default_factory=list)
+    ll_conclusion: Optional[str] = Field(None, description="Lessons learned conclusion")
 
 
 # ============================================================================
 # D8 - Recognize Team and Individual Contributions
 # ============================================================================
 class ClosureSignature(BaseModel):
-    """Signatures de clôture"""
-    closed_by: Optional[str] = Field(None, description="Fermé par (nom et titre)")
-    closure_date: Optional[date] = Field(None, description="Date de clôture")
-    approved_by: Optional[str] = Field(None, description="Approuvé par (Quality Manager)")
-    approval_date: Optional[date] = Field(None, description="Date d'approbation")
+    """Closure signatures"""
+    closed_by: Optional[str] = Field(None, description="Closed by (name and title)")
+    closure_date: Optional[str] = Field(None, description="Closure date")
+    approved_by: Optional[str] = Field(None, description="Approved by (Quality Manager)")
+    approval_date: Optional[str] = Field(None, description="Approval date")
 
 class D8Data(BaseModel):
-    """Structure de données pour l'étape D8 - Closure & Capitalization"""
-    # Final Closure Statement
+    """D8 - Closure & Capitalization data structure"""
     closure_statement: Optional[str] = Field(
         None, 
-        description="Déclaration finale de clôture (satisfaction client, non-récurrence, apprentissage, documentation)"
+        description="Final closure statement"
     )
-    
-    # Signatures & Validation
     signatures: Optional[ClosureSignature] = None
-
-
-# ============================================================================
-# Map des schémas par step_code
-# ============================================================================
-STEP_SCHEMAS = {
-    'D1': D1Data,
-    'D2': D2Data,
-    'D3': D3Data,
-    'D4': D4Data,
-    'D5': D5Data,
-    'D6': D6Data,
-    'D7': D7Data,
-    'D8': D8Data,
-}
-
-
-def get_step_schema(step_code: str):
-    """Récupère le schéma Pydantic pour un step_code donné"""
-    return STEP_SCHEMAS.get(step_code)
