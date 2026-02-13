@@ -14,7 +14,8 @@ class Complaint(Base):
     __tablename__ = 'complaints'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    
+    reference_number = Column(String(50), unique=True, nullable=False, index=True)
+
 
     complaint_name = Column(String(255), nullable=False, comment="Form: Complaint name *")
     quality_issue_warranty = Column(String(100), comment="Form: Quality issue / Warranty *")
