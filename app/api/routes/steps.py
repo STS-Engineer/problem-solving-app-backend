@@ -5,7 +5,6 @@ from typing import Dict, Any
 
 from app.api.deps import get_db
 from app.services.step_service import StepService
-from app.services.ai_validation_service import AIValidationService
 from app.schemas.step_data import *
 from app.models.report import Report
 from app.models.report_step import ReportStep
