@@ -10,6 +10,7 @@ app = FastAPI(title="AVOCarbon Complaints/8D report API")
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://avocarbon-customer-complaint.azurewebsites.net"
 ]
 
 # Ajoute l'env si elle existe
