@@ -132,188 +132,213 @@ class StepService:
         
         return step
     
-    # app/services/step_service.py (MISE À JOUR de _validate_required_fields)
-
     @staticmethod
     def _validate_required_fields(step_code: str, data: dict) -> bool:
-            """Validate that required fields are present"""
-            required_fields = {
-                'D1': ['team_members'],
-                'D2': ['four_w_2h'],
-                'D3': ['defected_part_status'],
-                'D4': ['root_cause_occurrence'],
-                'D5': ['corrective_actions_occurrence'],
-                'D6': ['monitoring', 'checklist'],
-                'D7': ['ll_conclusion'],
-                'D8': ['closure_statement']
-            }
+        """Validate that required fields are present"""
+        required_fields = {
+            'D1': ['team_members'],
+            'D2': ['four_w_2h'],
+            'D3': ['defected_part_status'],
+            'D4': ['root_cause_occurrence'],
+            'D5': ['corrective_actions_occurrence'],
+            'D6': ['monitoring', 'checklist'],
+            'D7': ['ll_conclusion'],
+            'D8': ['closure_statement']
+        }
 
-            # must be a dict with something in it
-            if not isinstance(data, dict) or not data:
+        # must be a dict with something in it
+        if not isinstance(data, dict) or not data:
+            return False
+
+        # D1 specific validation
+        if step_code == "D1":
+            members = data.get("team_members")
+            if not isinstance(members, list) or len(members) < 2:
+                return False
+            required_member_fields = ["name", "function", "department", "role"]
+            if not all(all(m.get(k) for k in required_member_fields) for m in members):
+                return False
+            return True
+
+        # D2 specific validation
+        if step_code == "D2":
+            four_w_2h = data.get("four_w_2h")
+            if not isinstance(four_w_2h, dict):
+                return False
+            filled_count = sum(1 for v in four_w_2h.values() if v not in (None, "", [], {}))
+            return filled_count >= 3
+
+        # D3 specific validation
+        if step_code == "D3":
+            defected = data.get("defected_part_status")
+            if not isinstance(defected, dict):
+                return False
+            checkbox_keys = ["returned", "isolated", "identified"]
+            has_checkbox = any(bool(defected.get(k)) for k in checkbox_keys)
+            if not has_checkbox:
+                return False
+            if defected.get("isolated") and not defected.get("isolated_location", "").strip():
+                return False
+            if defected.get("identified") and not defected.get("identified_method", "").strip():
+                return False
+            return True
+
+        # D4 specific validation
+        if step_code == "D4":
+            occ = data.get("root_cause_occurrence") or {}
+            nond = data.get("root_cause_non_detection") or {}
+            if not occ.get("root_cause", "").strip():
+                return False
+            if not occ.get("validation_method", "").strip():
+                return False
+            if not nond.get("root_cause", "").strip():
+                return False
+            if not nond.get("validation_method", "").strip():
+                return False
+            return True
+
+        # D5 specific validation - UPDATED
+        if step_code == "D5":
+            occ = data.get("corrective_actions_occurrence")
+            det = data.get("corrective_actions_detection")
+            if not isinstance(occ, list) or not isinstance(det, list):
                 return False
 
-            # D1 specific validation
-            if step_code == "D1":
-                members = data.get("team_members")
-                if not isinstance(members, list) or len(members) < 2:
+            def row_ok(r: dict) -> bool:
+                if not isinstance(r, dict):
                     return False
-                required_member_fields = ["name", "function", "department", "role"]
-                if not all(all(m.get(k) for k in required_member_fields) for m in members):
+                # Only require action, responsible, and due_date for D5
+                if not str(r.get("action", "")).strip():
                     return False
-                return True
-
-            # D2 specific validation
-            if step_code == "D2":
-                four_w_2h = data.get("four_w_2h")
-                if not isinstance(four_w_2h, dict):
+                if not str(r.get("responsible", "")).strip():
                     return False
-                filled_count = sum(1 for v in four_w_2h.values() if v not in (None, "", [], {}))
-                return filled_count >= 3
-
-            # D3 specific validation
-            if step_code == "D3":
-                defected = data.get("defected_part_status")
-                if not isinstance(defected, dict):
-                    return False
-                checkbox_keys = ["returned", "isolated", "identified"]
-                has_checkbox = any(bool(defected.get(k)) for k in checkbox_keys)
-                if not has_checkbox:
-                    return False
-                if defected.get("isolated") and not defected.get("isolated_location", "").strip():
-                    return False
-                if defected.get("identified") and not defected.get("identified_method", "").strip():
+                if not str(r.get("due_date", "")).strip():
                     return False
                 return True
 
-            # D4 specific validation
-            if step_code == "D4":
-                occ = data.get("root_cause_occurrence") or {}
-                nond = data.get("root_cause_non_detection") or {}
-                if not occ.get("root_cause", "").strip():
-                    return False
-                if not occ.get("validation_method", "").strip():
-                    return False
-                if not nond.get("root_cause", "").strip():
-                    return False
-                if not nond.get("validation_method", "").strip():
-                    return False
-                return True
+            has_occ = any(row_ok(r) for r in occ)
+            has_det = any(row_ok(r) for r in det)
+            return has_occ or has_det
 
-            # D5 specific validation
-            if step_code == "D5":
-                occ = data.get("corrective_actions_occurrence")
-                det = data.get("corrective_actions_detection")
-                if not isinstance(occ, list) or not isinstance(det, list):
+        # D6 specific validation - UPDATED
+        if step_code == "D6":
+            # Section I - Implementation of corrective actions
+            occ = data.get("corrective_actions_occurrence")
+            det = data.get("corrective_actions_detection")
+            
+            # Must have at least one implementation entry
+            def impl_ok(r: dict) -> bool:
+                if not isinstance(r, dict):
                     return False
-
-                def row_ok(r: dict) -> bool:
-                    if not isinstance(r, dict):
-                        return False
-                    if not str(r.get("action", "")).strip():
-                        return False
-                    if not str(r.get("responsible", "")).strip():
-                        return False
-                    if not str(r.get("due_date", "")).strip():
-                        return False
-                    return True
-
-                has_occ = any(row_ok(r) for r in occ)
-                has_det = any(row_ok(r) for r in det)
-                return has_occ or has_det
-
-            # D6 specific validation
-            if step_code == "D6":
-                monitoring = data.get("monitoring")
-                checklist = data.get("checklist")
-                
-                # Require monitoring section to exist
-                if not isinstance(monitoring, dict):
+                # Action, responsible, due_date should be populated from D5
+                # We only check that imp_date or evidence is filled
+                if not str(r.get("action", "")).strip():
                     return False
-                
-                # At least ONE of these monitoring fields must be filled
-                has_monitoring = bool(
-                    (monitoring.get("monitoring_interval") or "").strip() or
-                    monitoring.get("pieces_produced") or
-                    monitoring.get("rejection_rate") or
-                    (monitoring.get("audited_by") or "").strip() or
-                    (monitoring.get("audit_date") or "").strip()
+                if not str(r.get("responsible", "")).strip():
+                    return False
+                if not str(r.get("due_date", "")).strip():
+                    return False
+                # At least one of imp_date or evidence should be filled
+                has_imp = bool(str(r.get("imp_date", "")).strip())
+                has_evidence = bool(str(r.get("evidence", "")).strip())
+                return has_imp or has_evidence
+
+            has_occ_impl = isinstance(occ, list) and any(impl_ok(r) for r in occ)
+            has_det_impl = isinstance(det, list) and any(impl_ok(r) for r in det)
+            
+            if not (has_occ_impl or has_det_impl):
+                return False
+            
+            # Section II - Monitoring
+            monitoring = data.get("monitoring")
+            if not isinstance(monitoring, dict):
+                return False
+            
+            # At least ONE of these monitoring fields must be filled
+            has_monitoring = bool(
+                (monitoring.get("monitoring_interval") or "").strip() or
+                monitoring.get("pieces_produced") or
+                monitoring.get("rejection_rate") or
+                (monitoring.get("audited_by") or "").strip() or
+                (monitoring.get("audit_date") or "").strip()
+            )
+            
+            if not has_monitoring:
+                return False
+            
+            # Section III - Checklist
+            checklist = data.get("checklist")
+            if not isinstance(checklist, list) or len(checklist) == 0:
+                return False
+            
+            # Count how many questions have at least one shift checked
+            verified_count = sum(
+                1 for item in checklist 
+                if isinstance(item, dict) and (
+                    item.get("shift_1") or item.get("shift_2") or item.get("shift_3")
                 )
-                
-                if not has_monitoring:
+            )
+            
+            completion_rate = verified_count / len(checklist) if len(checklist) > 0 else 0
+            
+            # At least 50% must be verified across any shift
+            return completion_rate >= 0.5
+
+        if step_code == "D7":
+            # Require at least ll_conclusion OR one completed section
+            ll_conclusion = data.get("ll_conclusion", "").strip()
+            
+            def list_has_content(lst):
+                if not isinstance(lst, list):
                     return False
-                
-                # Require checklist to exist and have items
-                if not isinstance(checklist, list) or len(checklist) == 0:
-                    return False
-                
-                # Count how many questions have at least one shift checked
-                verified_count = sum(
-                    1 for item in checklist 
-                    if isinstance(item, dict) and (
-                        item.get("shift_1") or item.get("shift_2") or item.get("shift_3")
-                    )
+                return any(
+                    any(str(v).strip() for v in item.values() if v is not None)
+                    for item in lst
+                    if isinstance(item, dict)
                 )
-                
-                completion_rate = verified_count / len(checklist) if len(checklist) > 0 else 0
-                
-                # At least 50% must be verified across any shift
-                return completion_rate >= 0.5
-            if step_code == "D7":
-                # Require at least ll_conclusion OR one completed section
-                ll_conclusion = data.get("ll_conclusion", "").strip()
-                
-                def list_has_content(lst):
-                    if not isinstance(lst, list):
-                        return False
-                    return any(
-                        any(str(v).strip() for v in item.values() if v is not None)
-                        for item in lst
-                        if isinstance(item, dict)
-                    )
-                
-                has_risks = list_has_content(data.get("recurrence_risks", []))
-                has_disseminations = list_has_content(data.get("lesson_disseminations", []))
-                has_replications = list_has_content(data.get("replication_validations", []))
-                has_kb = list_has_content(data.get("knowledge_base_updates", []))
-                has_monitoring = list_has_content(data.get("long_term_monitoring", []))
-                
-                # Either conclusion OR at least one section filled
-                return ll_conclusion or any([
-                    has_risks, has_disseminations, has_replications, has_kb, has_monitoring
-                ])
+            
+            has_risks = list_has_content(data.get("recurrence_risks", []))
+            has_disseminations = list_has_content(data.get("lesson_disseminations", []))
+            has_replications = list_has_content(data.get("replication_validations", []))
+            has_kb = list_has_content(data.get("knowledge_base_updates", []))
+            has_monitoring = list_has_content(data.get("long_term_monitoring", []))
+            
+            # Either conclusion OR at least one section filled
+            return ll_conclusion or any([
+                has_risks, has_disseminations, has_replications, has_kb, has_monitoring
+            ])
 
-            # ✅ D8 specific validation
-            if step_code == "D8":
-                closure = data.get("closure_statement", "").strip()
-                if not closure:
+        # D8 specific validation
+        if step_code == "D8":
+            closure = data.get("closure_statement", "").strip()
+            if not closure:
+                return False
+            
+            # Optional: also check signatures
+            signatures = data.get("signatures")
+            if signatures:
+                if not signatures.get("closed_by", "").strip():
                     return False
-                
-                # Optional: also check signatures
-                signatures = data.get("signatures")
-                if signatures:
-                    if not signatures.get("closed_by", "").strip():
-                        return False
-                
+            
+            return True
+
+        # Generic fallback
+        step_required = required_fields.get(step_code, [])
+        if not step_required:
+            return True
+
+        def is_filled(value) -> bool:
+            if value is None:
+                return False
+            if isinstance(value, str):
+                return value.strip() != ""
+            if isinstance(value, (list, dict)):
+                return len(value) > 0
+            if isinstance(value, bool):
                 return True
+            return bool(value)
 
-            # Generic fallback
-            step_required = required_fields.get(step_code, [])
-            if not step_required:
-                return True
-
-            def is_filled(value) -> bool:
-                if value is None:
-                    return False
-                if isinstance(value, str):
-                    return value.strip() != ""
-                if isinstance(value, (list, dict)):
-                    return len(value) > 0
-                if isinstance(value, bool):
-                    return True
-                return bool(value)
-
-            return all(is_filled(data.get(field)) for field in step_required)
-    
+        return all(is_filled(data.get(field)) for field in step_required)
     @staticmethod
     def reject_step(
         db: Session,

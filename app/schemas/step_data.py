@@ -169,21 +169,19 @@ class D4Data(BaseModel):
 # ============================================================================
 # D5 - Choose and Verify Permanent Corrective Actions
 # ============================================================================
-class CorrectiveAction(BaseModel):
-    """Corrective action item"""
+class CorrectiveActionD5(BaseModel):
+    """Corrective action item (D5 - planning only)"""
     action: Optional[str] = Field(None, description="Action description")
     responsible: Optional[str] = Field(None, description="Responsible person")
     due_date: Optional[str] = Field(None, description="Due date")
-    imp_date: Optional[str] = Field(None, description="Implementation date")
-    evidence: Optional[str] = Field(None, description="Evidence reference")
 
 class D5Data(BaseModel):
     """D5 - Corrective Actions data structure"""
-    corrective_actions_occurrence: List[CorrectiveAction] = Field(
+    corrective_actions_occurrence: List[CorrectiveActionD5] = Field(
         default_factory=list,
         description="Corrective actions for occurrence"
     )
-    corrective_actions_detection: List[CorrectiveAction] = Field(
+    corrective_actions_detection: List[CorrectiveActionD5] = Field(
         default_factory=list,
         description="Corrective actions for detection"
     )
@@ -192,6 +190,14 @@ class D5Data(BaseModel):
 # ============================================================================
 # D6 - Implement Permanent Corrective Actions
 # ============================================================================
+class CorrectiveActionImplementation(BaseModel):
+    """Implementation details for a corrective action from D5"""
+    action: str = Field(..., description="Action description (from D5)")
+    responsible: str = Field(..., description="Responsible person (from D5)")
+    due_date: str = Field(..., description="Due date (from D5)")
+    imp_date: Optional[str] = Field(None, description="Actual implementation date")
+    evidence: Optional[str] = Field(None, description="Evidence reference/file")
+
 class ImplementationMonitoring(BaseModel):
     """Implementation monitoring"""
     monitoring_interval: Optional[str] = Field(None, description="Monitoring interval of time")
@@ -212,15 +218,25 @@ class ImplementationChecklistItem(BaseModel):
 
 class D6Data(BaseModel):
     """D6 - Implementation & Effectiveness Check data structure"""
+    # Section I - Corrective Action Implementation (references D5)
+    corrective_actions_occurrence: List[CorrectiveActionImplementation] = Field(
+        default_factory=list,
+        description="Implementation details for occurrence actions from D5"
+    )
+    corrective_actions_detection: List[CorrectiveActionImplementation] = Field(
+        default_factory=list,
+        description="Implementation details for detection actions from D5"
+    )
+    # Section II - Monitoring
     monitoring: Optional[ImplementationMonitoring] = Field(
         None,
         description="Section II - Implementation monitoring data"
     )
+    # Section III - Checklist
     checklist: List[ImplementationChecklistItem] = Field(
         default_factory=list,
         description="Section III - Implementation verification checklist"
     )
-
 
 # ============================================================================
 # D7 - Prevent Recurrence
