@@ -1,3 +1,5 @@
+# app/services/step_services.py
+
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
@@ -11,6 +13,8 @@ from app.models.step_validation import StepValidation
 from app.schemas.step_data import (
     D1Data, D2Data, D3Data, D4Data, D5Data, D6Data, D7Data, D8Data
 )
+
+from app.services.chatbot_service import ChatbotService
 
 STEP_SCHEMAS = {
     'D1': D1Data,
@@ -92,10 +96,12 @@ class StepService:
     def submit_step(
         db: Session,
         step_id: int,
-    ) -> ReportStep:
+    ) -> Dict[str, Any]:
         """
         Submit a step for AI validation
-        Change status from 'draft' to 'submitted'
+        
+        Returns:
+            Dictionary containing step and validation results
         """
         step = db.query(ReportStep).filter(ReportStep.id == step_id).first()
         if not step:
@@ -113,28 +119,85 @@ class StepService:
                 status_code=422, 
                 detail="Incomplete step data. Please fill all required fields."
             )
-        #get report of step
-        report = db.query(Report).filter(Report.id == step.report_id).first()
-        complaint=db.query(Complaint).filter(Complaint.id==report.complaint_id).first()
-        if complaint:
-            complaint.status = step.step_code
-
-        step.status = 'validated'  # Auto-validate for now (TODO: AI validation)
-        step.completed_by = None
         
-        step.completed_at = datetime.now(timezone.utc)
-        
+        # Change status to 'submitted' before AI validation
+        step.status = 'submitted'
+        step.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(step)
         
-        # TODO: Trigger AI validation here
-        # AIValidationService.validate_step(step_id)
-        
-        return step
+        # 🆕 TRIGGER AI VALIDATION
+        try:
+            chatbot = ChatbotService(db)
+            validation_result = chatbot.validate_step(
+                report_step_id=step_id,
+                step_code=step.step_code,
+                step_data=None  # Will read from DB automatically
+            )
+            
+            # Update step based on validation result
+            if validation_result['decision'] == 'pass':
+                step.status = 'validated'
+                # step.completed_by = user_id
+                step.completed_at = datetime.now(timezone.utc)
+                
+                # Update complaint status to current step
+                report = db.query(Report).filter(Report.id == step.report_id).first()
+                if report:
+                    complaint = db.query(Complaint).filter(
+                        Complaint.id == report.complaint_id
+                    ).first()
+                    if complaint:
+                        complaint.status = step.step_code
+                
+            elif validation_result['decision'] == 'fail':
+                step.status = 'rejected'
+            
+            db.commit()
+            db.refresh(step)
+            
+            return {
+                "step": step,
+                "validation": validation_result,
+                "message": (
+                    "Step validated successfully" 
+                    if validation_result['decision'] == 'pass' 
+                    else "Step rejected - please review feedback"
+                )
+            }
+            
+        except ValueError as e:
+            # Knowledge base or data issues
+            db.rollback()
+            step.status = 'draft'
+            db.commit()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Validation failed: {str(e)}"
+            )
+        except RuntimeError as e:
+            # OpenAI API issues
+            db.rollback()
+            step.status = 'draft'
+            db.commit()
+            raise HTTPException(
+                status_code=503,
+                detail=f"AI service unavailable: {str(e)}"
+            )
+        except Exception as e:
+            # Unexpected errors
+            db.rollback()
+            step.status = 'draft'
+            db.commit()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Unexpected error during validation: {str(e)}"
+            )
     
     @staticmethod
     def _validate_required_fields(step_code: str, data: dict) -> bool:
         """Validate that required fields are present"""
+        # ... (keep your existing validation logic)
         required_fields = {
             'D1': ['team_members'],
             'D2': ['four_w_2h'],
@@ -146,11 +209,9 @@ class StepService:
             'D8': ['closure_statement']
         }
 
-        # must be a dict with something in it
         if not isinstance(data, dict) or not data:
             return False
 
-        # D1 specific validation
         if step_code == "D1":
             members = data.get("team_members")
             if not isinstance(members, list) or len(members) < 2:
@@ -160,7 +221,6 @@ class StepService:
                 return False
             return True
 
-        # D2 specific validation
         if step_code == "D2":
             four_w_2h = data.get("four_w_2h")
             if not isinstance(four_w_2h, dict):
@@ -168,7 +228,6 @@ class StepService:
             filled_count = sum(1 for v in four_w_2h.values() if v not in (None, "", [], {}))
             return filled_count >= 3
 
-        # D3 specific validation
         if step_code == "D3":
             defected = data.get("defected_part_status")
             if not isinstance(defected, dict):
@@ -183,7 +242,6 @@ class StepService:
                 return False
             return True
 
-        # D4 specific validation
         if step_code == "D4":
             occ = data.get("root_cause_occurrence") or {}
             nond = data.get("root_cause_non_detection") or {}
@@ -197,7 +255,6 @@ class StepService:
                 return False
             return True
 
-        # D5 specific validation - UPDATED
         if step_code == "D5":
             occ = data.get("corrective_actions_occurrence")
             det = data.get("corrective_actions_detection")
@@ -207,7 +264,6 @@ class StepService:
             def row_ok(r: dict) -> bool:
                 if not isinstance(r, dict):
                     return False
-                # Only require action, responsible, and due_date for D5
                 if not str(r.get("action", "")).strip():
                     return False
                 if not str(r.get("responsible", "")).strip():
@@ -220,25 +276,19 @@ class StepService:
             has_det = any(row_ok(r) for r in det)
             return has_occ or has_det
 
-        # D6 specific validation - UPDATED
         if step_code == "D6":
-            # Section I - Implementation of corrective actions
             occ = data.get("corrective_actions_occurrence")
             det = data.get("corrective_actions_detection")
             
-            # Must have at least one implementation entry
             def impl_ok(r: dict) -> bool:
                 if not isinstance(r, dict):
                     return False
-                # Action, responsible, due_date should be populated from D5
-                # We only check that imp_date or evidence is filled
                 if not str(r.get("action", "")).strip():
                     return False
                 if not str(r.get("responsible", "")).strip():
                     return False
                 if not str(r.get("due_date", "")).strip():
                     return False
-                # At least one of imp_date or evidence should be filled
                 has_imp = bool(str(r.get("imp_date", "")).strip())
                 has_evidence = bool(str(r.get("evidence", "")).strip())
                 return has_imp or has_evidence
@@ -249,12 +299,10 @@ class StepService:
             if not (has_occ_impl or has_det_impl):
                 return False
             
-            # Section II - Monitoring
             monitoring = data.get("monitoring")
             if not isinstance(monitoring, dict):
                 return False
             
-            # At least ONE of these monitoring fields must be filled
             has_monitoring = bool(
                 (monitoring.get("monitoring_interval") or "").strip() or
                 monitoring.get("pieces_produced") or
@@ -266,12 +314,10 @@ class StepService:
             if not has_monitoring:
                 return False
             
-            # Section III - Checklist
             checklist = data.get("checklist")
             if not isinstance(checklist, list) or len(checklist) == 0:
                 return False
             
-            # Count how many questions have at least one shift checked
             verified_count = sum(
                 1 for item in checklist 
                 if isinstance(item, dict) and (
@@ -280,12 +326,9 @@ class StepService:
             )
             
             completion_rate = verified_count / len(checklist) if len(checklist) > 0 else 0
-            
-            # At least 50% must be verified across any shift
             return completion_rate >= 0.5
 
         if step_code == "D7":
-            # Require at least ll_conclusion OR one completed section
             ll_conclusion = data.get("ll_conclusion", "").strip()
             
             def list_has_content(lst):
@@ -303,18 +346,15 @@ class StepService:
             has_kb = list_has_content(data.get("knowledge_base_updates", []))
             has_monitoring = list_has_content(data.get("long_term_monitoring", []))
             
-            # Either conclusion OR at least one section filled
             return ll_conclusion or any([
                 has_risks, has_disseminations, has_replications, has_kb, has_monitoring
             ])
 
-        # D8 specific validation
         if step_code == "D8":
             closure = data.get("closure_statement", "").strip()
             if not closure:
                 return False
             
-            # Optional: also check signatures
             signatures = data.get("signatures")
             if signatures:
                 if not signatures.get("closed_by", "").strip():
@@ -322,7 +362,6 @@ class StepService:
             
             return True
 
-        # Generic fallback
         step_required = required_fields.get(step_code, [])
         if not step_required:
             return True
@@ -339,6 +378,7 @@ class StepService:
             return bool(value)
 
         return all(is_filled(data.get(field)) for field in step_required)
+    
     @staticmethod
     def reject_step(
         db: Session,
@@ -415,3 +455,10 @@ class StepService:
         return db.query(ReportStep).filter(
             ReportStep.report_id == report_id
         ).order_by(ReportStep.step_code).all()
+    
+    @staticmethod
+    def get_step_validation(db: Session, step_id: int) -> Optional[StepValidation]:
+        """Get validation results for a step"""
+        return db.query(StepValidation).filter(
+            StepValidation.report_step_id == step_id
+        ).first()

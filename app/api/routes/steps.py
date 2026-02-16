@@ -63,24 +63,17 @@ def submit_step_for_validation(
     Change le statut de 'draft' à 'submitted'
     Déclenche automatiquement la validation GPT
     """
-    step = StepService.submit_step(db, step_id)
-    
-    # #TODO: Activer quand la validation AI sera prête
-    # try:
-    #     validation_result = AIValidationService.validate_step(db, step_id)
-    #     return {
-    #         "step": step,
-    #         "validation": validation_result
-    #     }
-    # except Exception as e:
-    #     return {
-    #         "step": step,
-    #         "validation": {"status": "pending", "error": str(e)}
-    #     }
+    result = StepService.submit_step(
+        db=db,
+        step_id=step_id,
+    )
     
     return {
-        "step": step,
-        "message": "Step submitted. AI validation pending."
+        "success": True,
+        "step_id": result["step"].id,
+        "status": result["step"].status,
+        "validation": result["validation"],
+        "message": result["message"]
     }
 
 @router.get("/complaint/{complaint_id}/step/{step_code}")
@@ -114,3 +107,27 @@ def list_steps_by_complaint(complaint_id: int, db: Session = Depends(get_db)):
 
     steps = db.query(ReportStep).filter(ReportStep.report_id == report.id).order_by(ReportStep.step_code).all()
     return {"report_id": report.id, "steps": steps}
+
+
+@router.get("/steps/{step_id}/validation")
+def get_step_validation_feedback(
+    step_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Get validation feedback for a step
+    """
+    validation = StepService.get_step_validation(db, step_id)
+    
+    if not validation:
+        raise HTTPException(status_code=404, detail="No validation found for this step")
+    
+    return {
+        "decision": validation.decision,
+        "missing": validation.missing,
+        "issues": validation.issues,
+        "suggestions": validation.suggestions,
+        "professional_rewrite": validation.professional_rewrite,
+        "notes": validation.notes,
+        "validated_at": validation.validated_at
+    }
