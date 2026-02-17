@@ -12,3 +12,4 @@ requests
 tiktoken
 regex
 tqdm
+python-multipart
