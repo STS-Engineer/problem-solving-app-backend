@@ -118,7 +118,7 @@ class StepService:
         if not StepService._validate_required_fields(step.step_code, step.data):
             raise HTTPException(
                 status_code=422, 
-                detail="Incomplete step data. Please fill all required fields."
+                detail="Please fill in all required fields before continuing."
             )
         
         # Change status to 'submitted' before AI validation
