@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from pydantic import BaseModel, Field, field_validator
+from typing import Any, List, Optional
 from datetime import date as dt_date
 # ============================================================================
 # D1 - Establish the Team
@@ -31,6 +31,13 @@ class FourW2H(BaseModel):
     how: Optional[str] = Field(None, description="Comment détecté ?")
     how_many: Optional[str] = Field(None, description="Quantité ? (avec unité)")
 
+    @field_validator("when", mode="before")
+    @classmethod
+    def coerce_empty_date_to_none(cls, v: Any) -> Any:
+        """Treat empty string from frontend as None instead of failing date parsing."""
+        if v == "" or v is None:
+            return None
+        return v
 class IsIsNotFactor(BaseModel):
     """Facteur IS / IS NOT"""
     factor: str = Field(..., description="Nom du facteur (Product, Time, Lot, Pattern)")
