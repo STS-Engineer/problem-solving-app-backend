@@ -16,6 +16,7 @@ from app.schemas.step_data import (
 
 from app.services.chatbot_service import ChatbotService
 
+
 STEP_SCHEMAS = {
     'D1': D1Data,
     'D2': D2Data,
