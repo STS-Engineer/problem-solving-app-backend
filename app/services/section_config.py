@@ -43,9 +43,16 @@ D2_SECTIONS: SectionDef = {
 # D3 — Interim Containment
 # ---------------------------------------------------------------------------
 D3_SECTIONS: SectionDef = {
-    "defected_parts":   ["defected_part_status"],
-    "suspected_parts":  ["suspected_parts_status", "alert_communicated_to", "alert_number"],
-    "restart":          ["restart_production", "containment_responsible"],
+    "containment":  [                          # ← merged section 1+2
+        "defected_part_status",
+        "suspected_parts_status",
+        "alert_communicated_to",
+        "alert_number",
+    ],
+    "restart":      [
+        "restart_production",
+        "containment_responsible",
+    ],
 }
 
 # ---------------------------------------------------------------------------
