@@ -9,13 +9,10 @@ from app.services.step_service import StepService
 from app.schemas.step_data import *
 from app.models.report import Report
 from app.models.report_step import ReportStep
+from app.services.section_config import STEP_SECTIONS
 
 router = APIRouter()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# IMPORTANT: specific paths MUST be registered before wildcard /{step_id}
-# FastAPI matches routes in declaration order.
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 @router.get("/complaint/{complaint_id}/step/{step_code}")
@@ -43,11 +40,6 @@ def list_steps_by_complaint(
     complaint_id: int,
     db: Session = Depends(get_db),
 ):
-    """
-    Returns ALL steps for a complaint.
-    Shape: { report_id: int, steps: StepData[] }
-    The frontend must extract .steps — see reports.ts getStepsByComplaintId fix.
-    """
     report = db.query(Report).filter(Report.complaint_id == complaint_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="No 8D report found for this complaint")
@@ -58,8 +50,21 @@ def list_steps_by_complaint(
         .order_by(ReportStep.step_code)
         .all()
     )
-
     return {"report_id": report.id, "steps": steps}
+
+@router.get("/complaint/{complaint_id}/steps/summary")
+def list_steps_summary(complaint_id: int, db: Session = Depends(get_db)):
+    report = db.query(Report).filter(Report.complaint_id == complaint_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="No 8D report found")
+
+    steps = (
+        db.query(ReportStep.id, ReportStep.step_code, ReportStep.status)
+        .filter(ReportStep.report_id == report.id)
+        .order_by(ReportStep.step_code)
+        .all()
+    )
+    return [{"id": s.id, "step_code": s.step_code, "status": s.status} for s in steps]
 
 
 @router.patch("/{step_id}/save")
@@ -71,19 +76,105 @@ def save_step_progress(
     return StepService.save_step_progress(db=db, step_id=step_id, data=data, validate_schema=True)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PER-SECTION VALIDATION  ← NEW
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/{step_id}/submit-section")
+def submit_section_for_validation(
+    step_id: int,
+    payload: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Validate a single named section of a step via the AI coach.
+
+    Body: { "section_key": "five_w_2h" }
+
+    Returns:
+    {
+      "success": true,
+      "step_id": int,
+      "section_key": str,
+      "validation": ValidationResult,
+      "all_sections_passed": bool,
+      "passed_sections": [str],
+      "remaining_sections": [str]
+    }
+    """
+    section_key = payload.get("section_key")
+    if not section_key:
+        raise HTTPException(status_code=400, detail="section_key is required in request body")
+
+    result = StepService.submit_section(db=db, step_id=step_id, section_key=section_key)
+
+    return {
+        "success": True,
+        "step_id": step_id,
+        "section_key": section_key,
+        "validation": result["validation"],
+        "all_sections_passed": result["all_sections_passed"],
+        "passed_sections": result["passed_sections"],
+        "remaining_sections": result["remaining_sections"],
+    }
+
+
+@router.get("/{step_id}/section-validations")
+def get_all_section_validations(
+    step_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Return all saved section validations for a step.
+    Useful for restoring UI state (which sections are already passed).
+
+    Returns:
+    {
+      "step_id": int,
+      "sections": {
+        "five_w_2h": { decision, missing_fields, quality_issues, ... },
+        "deviation":  { ... },
+        ...
+      }
+    }
+    """
+    rows = StepService.get_all_section_validations(db, step_id)
+    sections = {}
+    for row in rows:
+        field_improvements = {}
+        if row.professional_rewrite:
+            try:
+                field_improvements = json.loads(row.professional_rewrite)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        sections[row.section_key] = {
+            "decision":          row.decision,
+            "missing_fields":    row.missing or [],
+            "quality_issues":    row.issues or [],
+            "suggestions":       row.suggestions or [],
+            "field_improvements": field_improvements,
+            "overall_assessment": row.notes or "",
+            "validated_at":      row.validated_at.isoformat() if row.validated_at else None,
+        }
+
+    return {"step_id": step_id, "sections": sections}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FULL STEP SUBMIT  (D1 + legacy)
+# ─────────────────────────────────────────────────────────────────────────────
+
 @router.post("/{step_id}/submit")
 def submit_step_for_validation(
     step_id: int,
     db: Session = Depends(get_db),
 ):
     """
-    Submit a step for AI validation.
-    Returns a ValidationResult-shaped object the frontend can consume directly.
+    Full-step validation. Used for D1 (local validation).
+    D2-D8 should use /submit-section instead.
     """
     result = StepService.submit_step(db=db, step_id=step_id)
-
-    # result["validation"] already has the correct keys from ResponseParser /
-    # D1LocalValidator, so we pass it through untouched.
     return {
         "success": True,
         "step_id": result["step"].id,
@@ -98,45 +189,26 @@ def get_step_validation_feedback(
     step_id: int,
     db: Session = Depends(get_db),
 ):
-    """
-    Return validation feedback for a step.
-
-    DB columns (StepValidation model):
-        missing              ARRAY(Text)  → frontend: missing_fields
-        issues               ARRAY(Text)  → frontend: quality_issues
-        suggestions          ARRAY(Text)  → frontend: suggestions
-        professional_rewrite Text (JSON)  → frontend: field_improvements (dict)
-        notes                Text         → frontend: overall_assessment
-
-    The frontend ValidationResult interface expects:
-        { decision, missing_fields, incomplete_fields, quality_issues,
-          rules_violations, suggestions, field_improvements,
-          overall_assessment, language_detected }
-    """
     validation = StepService.get_step_validation(db, step_id)
-
     if not validation:
         raise HTTPException(status_code=404, detail="No validation found for this step")
 
-    # Parse field_improvements from the JSON string stored in professional_rewrite
     field_improvements: dict = {}
     if validation.professional_rewrite:
         try:
             field_improvements = json.loads(validation.professional_rewrite)
         except (json.JSONDecodeError, TypeError):
-            field_improvements = {}
+            pass
 
     return {
-        # ── exact field names the frontend ValidationResult type expects ──
         "decision":           validation.decision,
-        "missing_fields":     validation.missing or [],       # ARRAY(Text) → list
-        "incomplete_fields":  [],                              # merged into issues on write
-        "quality_issues":     validation.issues or [],        # ARRAY(Text) → list
-        "rules_violations":   [],                              # merged into issues on write
-        "suggestions":        validation.suggestions or [],   # ARRAY(Text) → list
-        "field_improvements": field_improvements,             # dict
-        "overall_assessment": validation.notes or "",         # str
-        "language_detected":  "en",
+        "missing_fields":     validation.missing or [],
+        "incomplete_fields":  [],
+        "quality_issues":     validation.issues or [],
+        "rules_violations":   [],
+        "suggestions":        validation.suggestions or [],
+        "field_improvements": field_improvements,
+        "overall_assessment": validation.notes or "",
     }
 
 

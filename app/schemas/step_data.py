@@ -9,7 +9,7 @@ class TeamMember(BaseModel):
     name: str = Field(..., description="Nom complet")
     function: str = Field(..., description="Fonction/Titre du poste")
     department: str = Field(..., description="Département")
-    role: str = Field(..., description="Rôle dans l'équipe (production|maintenance|engineering|logistics|team_leader|other)")
+    # role: str = Field(..., description="Rôle dans l'équipe (production|maintenance|engineering|logistics|team_leader|other)")
 
 class D1Data(BaseModel):
     """Structure de données pour l'étape D1 - Establish the Team"""
@@ -22,7 +22,7 @@ class D1Data(BaseModel):
 # ============================================================================
 # D2 - Describe the Problem
 # ============================================================================
-class FourW2H(BaseModel):
+class FiveW2H(BaseModel):
     """Analyse 4W2H du problème"""
     what: Optional[str] = Field(None, description="Quel défaut ?")
     where: Optional[str] = Field(None, description="Où ?")
@@ -30,6 +30,7 @@ class FourW2H(BaseModel):
     who: Optional[str] = Field(None, description="Qui a détecté ?")
     how: Optional[str] = Field(None, description="Comment détecté ?")
     how_many: Optional[str] = Field(None, description="Quantité ? (avec unité)")
+    why:Optional[str] =Field(None,description="Pourquoi ce probléme apparait?")
 
     @field_validator("when", mode="before")
     @classmethod
@@ -51,7 +52,7 @@ class D2Data(BaseModel):
         None, 
         description="Description de l'objet/processus et du défaut"
     )
-    four_w_2h: Optional[FourW2H] = None
+    five_w_2h: Optional[FiveW2H] = None
     
     # Déviation vs Standard
     standard_applicable: Optional[str] = Field(None, description="Standard applicable")
@@ -66,13 +67,13 @@ class D2Data(BaseModel):
     )
     
     # Impact & Preuves
-    estimated_cost: Optional[float] = Field(None, description="Coût estimé")
-    cost_currency: Optional[str] = Field("EUR", description="Devise (EUR|USD|CNY)")
-    customer_impact: Optional[str] = Field(
-        None, 
-        description="Impact client (No|Low|Medium|High)"
-    )
-    additional_notes: Optional[str] = Field(None, description="Notes additionnelles")
+    # : Optional[float] = Field(None, description="Coût estimé")
+    # cost_currency: Optional[str] = Field("EUR", description="Devise (EUR|USD|CNY)")
+    # customer_impact: Optional[str] = Field(
+    #     None, 
+    #     description="Impact client (No|Low|Medium|High)"
+    # )
+    # additional_notes: Optional[str] = Field(None, description="Notes additionnelles")
 
 
 # ============================================================================
