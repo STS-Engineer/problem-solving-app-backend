@@ -6,34 +6,22 @@ Supports both full-step and per-section validation.
 Per-section: step_code is passed as "D2_five_w_2h", "D3_restart", etc.
 The KB lookup uses the full scoped code as the section_hint key.
 """
-
 import json
 import re
 import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
-
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from openai import OpenAI, OpenAIError
-
 from app.core.config import settings
 from app.models.step_validation import StepValidation
 
 logger = logging.getLogger(__name__)
-
-
 # ============================================================
 # D1 LOCAL VALIDATOR  (no KB, no OpenAI)
 # ============================================================
-
-VALID_ROLES = {
-    "production", "maintenance", "engineering",
-    "logistics", "team_leader", "other"
-}
-
-REQUIRED_ROLES = {"team_leader"}
-REQUIRED_MEMBER_FIELDS = ["name", "function", "department", "role"]
+REQUIRED_MEMBER_FIELDS = ["name", "function", "department"]
 
 
 class D1LocalValidator:
@@ -46,6 +34,7 @@ class D1LocalValidator:
 
         members = step_data.get("team_members")
 
+        # Basic structure check
         if not isinstance(members, list):
             missing_fields.append("team_members")
             return self._build_result(
@@ -54,41 +43,31 @@ class D1LocalValidator:
                 overall_assessment="team_members field is missing or not a list.",
             )
 
+        # Minimum team size (soft rule — still fail if less than 2)
         if len(members) < 2:
             incomplete_fields.append(
                 "team_members: at least 2 members are required for a valid 8D team"
             )
             suggestions.append(
-                "Add more cross-functional members (e.g. Quality, Production, Engineering)."
+                "Add at least one more cross-functional member."
             )
 
         seen_names: List[str] = []
-        leader_count = 0
 
         for idx, member in enumerate(members):
             label = f"Member #{idx + 1}"
+
             if not isinstance(member, dict):
-                incomplete_fields.append(f"{label}: must be a dict/object")
+                incomplete_fields.append(f"{label}: must be a valid object")
                 continue
 
+            # Required fields validation
             for field in REQUIRED_MEMBER_FIELDS:
                 value = member.get(field, "")
                 if not isinstance(value, str) or not value.strip():
                     incomplete_fields.append(f"{label}: '{field}' is empty or missing")
 
-            role = member.get("role", "")
-            if role and role not in VALID_ROLES:
-                quality_issues.append(
-                    f"{label}: role '{role}' is invalid. "
-                    f"Must be one of: {', '.join(sorted(VALID_ROLES))}"
-                )
-                field_improvements[f"member_{idx+1}_role"] = (
-                    f"Use one of: {', '.join(sorted(VALID_ROLES))}"
-                )
-
-            if role == "team_leader":
-                leader_count += 1
-
+            # Duplicate name detection (quality issue, not blocking)
             name = member.get("name", "").strip().lower()
             if name:
                 if name in seen_names:
@@ -98,34 +77,20 @@ class D1LocalValidator:
                 else:
                     seen_names.append(name)
 
-        if leader_count == 0 and len(members) >= 2:
-            incomplete_fields.append(
-                "team_members: no team_leader assigned — "
-                "one member must have role = 'team_leader'"
-            )
-            suggestions.append(
-                "Assign the role 'team_leader' to the person responsible "
-                "for driving the 8D process."
-            )
-        elif leader_count > 1:
-            quality_issues.append(
-                f"team_members: {leader_count} members have role 'team_leader' — "
-                "only one team leader is allowed"
-            )
-
-        has_issues = bool(missing_fields or incomplete_fields or quality_issues)
-        decision = "fail" if has_issues else "pass"
+        # Decision logic (less strict)
+        has_blocking = bool(missing_fields or incomplete_fields)
+        decision = "fail" if has_blocking else "pass"
 
         if decision == "pass":
             overall = (
-                f"D1 validated ✅ — {len(members)} team member(s) correctly defined "
-                f"with all required fields and a designated team leader."
+                f"D1 validated ✅ — {len(members)} team member(s) defined "
+                f"with name, department, and function."
             )
         else:
-            total = len(incomplete_fields) + len(quality_issues) + len(missing_fields)
+            total = len(incomplete_fields) + len(missing_fields)
             overall = (
-                f"D1 needs {total} correction(s) before it can be approved. "
-                "Please fix the issues listed above."
+                f"D1 needs {total} correction(s) before approval. "
+                "Please complete the missing team member information."
             )
 
         return self._build_result(
@@ -161,7 +126,6 @@ class D1LocalValidator:
             "overall_assessment": overall_assessment,
             "language_detected": language_detected,
         }
-
 
 # ============================================================
 # KNOWLEDGE BASE RETRIEVER
@@ -676,6 +640,7 @@ class StepDataFormatter:
 
 SECTION_PASS_CRITERIA: Dict[str, str] = {
     # D2
+
     "D2_five_w_2h": """
 MINIMUM PASS CRITERIA for this section:
 - Problem description must be specific (not generic like "quality issue")
@@ -799,8 +764,6 @@ MINIMUM PASS CRITERIA for this section:
 - A closure statement that is one sentence or fewer should be flagged as insufficient
 """,
 }
-
-
 # ============================================================
 # PROMPT BUILDER
 # ============================================================
@@ -919,6 +882,14 @@ the content above. Do not speculate or invent violations.
 Evaluate ONLY the data shown above. Do not penalise for fields belonging to
 other sections — those are validated separately.
 
+Be firm but fair:
+- Do NOT fail for small phrasing issues, grammar, or formatting.
+- If content is relevant and complaint-specific but slightly lacking detail,
+  classify it as a QUALITY ISSUE rather than an automatic FAIL.
+- Only FAIL when a true blocking condition exists.
+- If the logic is coherent and actionable, lean toward PASS with improvement suggestions.
+- The severity of the decision must match the severity of the issue.
+
 Work through these checks in order:
 
 1. BLOCKING ISSUES (any one of these → immediate FAIL):
@@ -968,12 +939,9 @@ STRICT OUTPUT RULES:
 - If decision is "pass", missing_fields and incomplete_fields must be empty lists
 - Respond in the same language the user wrote in (check the submitted data language)
 """
-
-
 # ============================================================
 # OPENAI CLIENT
 # ============================================================
-
 class OpenAIClient:
     def __init__(self):
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
@@ -1001,12 +969,9 @@ class OpenAIClient:
         except OpenAIError as e:
             logger.error("❌ OpenAI API error: %s", str(e))
             raise RuntimeError(f"OpenAI validation failed: {str(e)}")
-
-
 # ============================================================
 # RESPONSE PARSER
 # ============================================================
-
 class ResponseParser:
     @staticmethod
     def parse(ai_text: str) -> Dict:
@@ -1034,12 +999,9 @@ class ResponseParser:
             "overall_assessment": data.get("overall_assessment", ""),
             "language_detected": data.get("language_detected", "en"),
         }
-
-
 # ============================================================
 # VALIDATION STORAGE
 # ============================================================
-
 class ValidationStorage:
     def __init__(self, db: Session):
         self.db = db
@@ -1081,14 +1043,10 @@ class ValidationStorage:
                 validated_at          = datetime.now(timezone.utc),
             ))
 
-
 # ============================================================
 # STEPS THAT USE LOCAL VALIDATION
 # ============================================================
-
 LOCAL_VALIDATION_STEPS = {"D1"}
-
-
 # ============================================================
 # MAIN CHATBOT SERVICE
 # ============================================================
