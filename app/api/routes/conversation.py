@@ -4,33 +4,99 @@ Conversation endpoints for interactive chatbot coaching.
 
 GET    /api/v1/steps/{step_id}/conversation/{section_key}
 POST   /api/v1/steps/{step_id}/conversation/{section_key}
+POST   /api/v1/steps/{step_id}/conversation/{section_key}/upload  ← NEW
 DELETE /api/v1/steps/{step_id}/conversation/{section_key}
 GET    /api/v1/steps/{step_id}/conversations
 """
 
-from typing import Any, Dict, Optional
+import hashlib
+import mimetypes
+import os
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text as sa_text
 
 from app.api.deps import get_db
+from app.models.file import File as FileModel
+from app.models.step_file import StepFile
 from app.services.conversation_service import ConversationService
 from app.services.chatbot_service import KnowledgeBaseRetriever
 
 router = APIRouter()
 
+# ─────────────────────────────────────────────────────────────────────────────
+# File upload config (mirrors step_files router)
+# ─────────────────────────────────────────────────────────────────────────────
+
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "./uploads/evidence"))
+MAX_SIZE_BYTES = 25 * 1024 * 1024
+SYSTEM_USER_ID: int = int(os.environ.get("SYSTEM_USER_ID", "1"))
+
+ALLOWED_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".gif",
+    ".webp", ".bmp", ".tif", ".tiff",
+    ".pdf",
+}
+ALLOWED_MIME_TYPES = {
+    "image/jpeg", "image/png", "image/gif",
+    "image/webp", "image/bmp", "image/tiff",
+    "application/pdf",
+}
+
+
+def _upload_dir() -> Path:
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    return UPLOAD_DIR
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _human_size(n: int) -> str:
+    for unit in ("B", "KB", "MB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}"
+        n //= 1024
+    return f"{n:.1f} GB"
+
+
+def _file_icon(mime_type: str) -> str:
+    if mime_type == "application/pdf":
+        return "📄"
+    if mime_type.startswith("image/"):
+        return "🖼️"
+    return "📎"
+
+
+def _serialize_file(sf: StepFile) -> dict:
+    f = sf.file
+    return {
+        "id":          sf.id,
+        "file_id":     f.id,
+        "filename":    f.original_name,
+        "stored_path": f.stored_path,
+        "mime_type":   f.mime_type or "application/octet-stream",
+        "size_bytes":  f.size_bytes,
+        "size_label":  _human_size(f.size_bytes),
+        "icon":        _file_icon(f.mime_type or ""),
+        "is_image":    (f.mime_type or "").startswith("image/"),
+        "uploaded_at": f.created_at.isoformat() if f.created_at else None,
+        "checksum":    f.checksum,
+    }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helpers
+# Guards
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _require_step(step_id: int, db: Session) -> None:
-    """
-    Raise HTTP 404 if step_id does not exist in report_steps.
-    This prevents the FK-violation 500 when the frontend passes a stale/wrong ID.
-    """
     row = db.execute(
         sa_text("SELECT id FROM report_steps WHERE id = :id"),
         {"id": step_id},
@@ -51,7 +117,7 @@ VALID_SECTION_KEYS = {
     "team_members",
     # D2
     "five_w_2h", "deviation", "is_is_not",
-    # D3-D8 (future)
+    # Future D3–D8
     "containment", "root_cause", "corrective_actions",
     "implementation", "prevention", "closure",
 }
@@ -61,7 +127,8 @@ def _require_section(section_key: str) -> None:
     if section_key not in VALID_SECTION_KEYS:
         raise HTTPException(
             status_code=422,
-            detail=f"Unknown section_key '{section_key}'. Valid keys: {sorted(VALID_SECTION_KEYS)}",
+            detail=f"Unknown section_key '{section_key}'. "
+                   f"Valid keys: {sorted(VALID_SECTION_KEYS)}",
         )
 
 
@@ -71,13 +138,16 @@ def _require_section(section_key: str) -> None:
 
 class SendMessageRequest(BaseModel):
     message: str
+    # Filenames of files that were just uploaded via the /upload endpoint
+    # in the same "send" action.  The service injects them into the AI context.
+    uploaded_file_names: Optional[List[str]] = None
 
 
 class ConversationResponse(BaseModel):
     step_id: int
     section_key: str
     messages: list
-    state: str          # opening | collecting | ready_to_validate
+    state: str  # opening | collecting | ready_to_validate
 
 
 class SendMessageResponse(BaseModel):
@@ -103,8 +173,8 @@ def get_conversation(
     section_key: str,
     db: Session = Depends(get_db),
 ):
-    _require_step(step_id, db)        # ← 404 guard
-    _require_section(section_key)     # ← 422 guard
+    _require_step(step_id, db)
+    _require_section(section_key)
     svc = ConversationService(db)
     return svc.get_or_start_conversation(step_id, section_key)
 
@@ -120,11 +190,12 @@ def send_message(
     body: SendMessageRequest,
     db: Session = Depends(get_db),
 ):
-    if not body.message.strip():
+    # Allow empty text message when files are being referenced
+    if not body.message.strip() and not body.uploaded_file_names:
         raise HTTPException(status_code=422, detail="Message cannot be empty")
 
-    _require_step(step_id, db)        # ← 404 guard
-    _require_section(section_key)     # ← 422 guard
+    _require_step(step_id, db)
+    _require_section(section_key)
 
     kb = KnowledgeBaseRetriever(db)
     complaint_context = kb.get_complaint_context(step_id)
@@ -136,11 +207,114 @@ def send_message(
             section_key=section_key,
             user_message=body.message.strip(),
             complaint_context=complaint_context or None,
+            uploaded_file_names=body.uploaded_file_names or None,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+
+@router.post(
+    "/{step_id}/conversation/{section_key}/upload",
+    summary="Upload evidence file(s) from chat — returns file records",
+)
+async def upload_conversation_files(
+    step_id: int,
+    section_key: str,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Upload one or more evidence files while chatting.
+
+    The frontend calls this BEFORE sending the accompanying text message,
+    then passes the returned filenames in `uploaded_file_names` on the
+    POST /conversation/{section_key} request so the AI sees them.
+
+    Returns a list of file records (same shape as the step_files router).
+    """
+    _require_step(step_id, db)
+    _require_section(section_key)
+
+    if not files:
+        raise HTTPException(status_code=422, detail="No files provided")
+
+    results = []
+    for file in files:
+        original_name = file.filename or "unnamed"
+        ext = Path(original_name).suffix.lower()
+
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"File type '{ext}' not allowed. "
+                       "Accepted: images (jpg, png, gif, webp, bmp, tiff) and PDF.",
+            )
+
+        content = await file.read()
+
+        if len(content) == 0:
+            raise HTTPException(status_code=422, detail=f"File '{original_name}' is empty.")
+
+        if len(content) > MAX_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File '{original_name}' too large "
+                       f"({_human_size(len(content))}). Max 25 MB.",
+            )
+
+        mime_type = (
+            file.content_type
+            or mimetypes.guess_type(original_name)[0]
+            or "application/octet-stream"
+        )
+        if mime_type == "image/jpg":
+            mime_type = "image/jpeg"
+
+        if mime_type not in ALLOWED_MIME_TYPES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"MIME type '{mime_type}' is not allowed.",
+            )
+
+        # Save to disk
+        stored_name = f"{uuid.uuid4().hex}{ext}"
+        dest = _upload_dir() / stored_name
+        dest.write_bytes(content)
+
+        # Insert file record
+        db_file = FileModel(
+            purpose       ="evidence",
+            original_name =original_name,
+            stored_path   =str(dest),
+            size_bytes    =len(content),
+            mime_type     =mime_type,
+            uploaded_by   =SYSTEM_USER_ID,
+            checksum      =_sha256(content),
+            created_at    =datetime.now(timezone.utc),
+        )
+        db.add(db_file)
+        db.flush()
+
+        # Link to step
+        step_file = StepFile(
+            report_step_id=step_id,
+            file_id       =db_file.id,
+            created_at    =datetime.now(timezone.utc),
+        )
+        db.add(step_file)
+        db.flush()
+        db.refresh(step_file)
+
+        results.append(_serialize_file(step_file))
+
+    db.commit()
+
+    return {
+        "uploaded": results,
+        "filenames": [r["filename"] for r in results],
+    }
 
 
 @router.delete(
