@@ -1,7 +1,7 @@
 
 from datetime import datetime, date, timezone
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, Date, ForeignKey, Enum as SQLEnum,
+    Column, Integer, String, Text, DateTime, Date, ForeignKey, Enum as SQLEnum
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
@@ -44,7 +44,17 @@ class Complaint(Base):
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     resolved_at = Column(DateTime)
+    due_date = Column(DateTime, nullable=True, index=True, comment="Expected resolution date")
+    closed_at = Column(DateTime, nullable=True, index=True, comment="When complaint was closed")
+
+     # NEW: Webhook and due date tracking
+    # due_date = Column(DateTime, nullable=True, index=True, comment="Expected resolution date")
+    # closed_at = Column(DateTime, nullable=True, index=True, comment="When complaint was closed")
+    # webhook_sent = Column(Boolean, nullable=False, default=False, index=True, comment="Whether webhook notification was sent successfully")
+    # webhook_attempts = Column(Integer, nullable=False, default=0, comment="Number of webhook send attempts")
+    # last_webhook_attempt = Column(DateTime, nullable=True, comment="Timestamp of last webhook attempt")
     
+
     # Relationships
     reporter = relationship("User", foreign_keys=[reported_by], back_populates="reported_complaints")
     assignee = relationship("User", foreign_keys=[assigned_to], back_populates="assigned_complaints")

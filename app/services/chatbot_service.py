@@ -11,6 +11,7 @@ import re
 import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
+from click import prompt
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from openai import OpenAI, OpenAIError
@@ -1102,6 +1103,17 @@ class OpenAIClient:
     def validate_step(self, prompt: str) -> str:
         try:
             logger.info("🤖 Calling OpenAI %s...", settings.OPENAI_MODEL)
+            logger.info("Prompt length: %d chars", len(prompt))
+            logger.info("Prompt content:\n%s", prompt) 
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            with open(f"debug_prompt_{timestamp}.txt", "w", encoding="utf-8") as f:
+
+                f.write("PROMPT:\n")
+                f.write(prompt)
+                f.write("\n\n")
+
+                
+        
             response = self.client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=[

@@ -29,7 +29,12 @@ class ReportStep(Base):
     completer = relationship("User", foreign_keys=[completed_by], back_populates="completed_steps")
     validation = relationship("StepValidation", back_populates="report_step", uselist=False)
     step_files = relationship("StepFile", back_populates="report_step", cascade="all, delete-orphan")
-    
+    conversations = relationship(
+        "StepConversation",
+        back_populates="report_step",
+        cascade="all, delete-orphan",
+        lazy="dynamic",   # optional — avoids loading all messages when loading a step
+    )
     # Constraints
     __table_args__ = (
         UniqueConstraint('report_id', 'step_code', name='unique_report_step'),
