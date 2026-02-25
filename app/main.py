@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from app.api.router import api_router
+import logging
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")  
 
@@ -12,7 +13,7 @@ origins = [
     "http://127.0.0.1:5173",
     "https://avocarbon-customer-complaint.azurewebsites.net"
 ]
-
+logging.basicConfig(level=logging.INFO)
 # Ajoute l'env si elle existe
 if FRONTEND_URL:
     origins.append(FRONTEND_URL)
