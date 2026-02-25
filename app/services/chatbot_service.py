@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.models.step_validation import StepValidation
 
 logger = logging.getLogger(__name__)
+
 # ============================================================
 # D1 LOCAL VALIDATOR  (no KB, no OpenAI)
 # ============================================================
@@ -128,6 +129,7 @@ class D1LocalValidator:
             "language_detected": language_detected,
         }
 
+
 # ============================================================
 # KNOWLEDGE BASE RETRIEVER
 # ============================================================
@@ -136,8 +138,31 @@ class KnowledgeBaseRetriever:
     def __init__(self, db: Session):
         self.db = db
 
+    # ------------------------------------------------------------------
+    # Explicit mapping: step_code → section_hint to query in kb_chunks
+    # Rules:
+    #   - D2_five_w_2h  → own hint  (D2_five_w_2h_coaching_validation)
+    #   - D2_is_is_not  → own hint  (D2_is_is_not_coaching_validation)
+    #   - D2_deviation  → fallback to D2_five_w_2h then D2 parent
+    #   - D3_*          → D3_coaching_validation  (shared parent)
+    #   - D4_*          → D4_coaching_validation  (shared parent)
+    #   - D5_*          → D5_coaching_validation  (shared parent)
+    #   - D6_*          → D6_coaching_validation  (shared parent)
+    #   - D7_*          → D7_coaching_validation  (shared parent)
+    #   - D8_*          → D8_coaching_validation  (shared parent)
+    # ------------------------------------------------------------------
+    SECTION_HINT_MAP: Dict[str, str] = {
+        # D2 — two sections have their own dedicated KB chunk
+        "D2_five_w_2h": "D2_five_w_2h_coaching_validation",
+        "D2_is_is_not": "D2_is_is_not_coaching_validation",
+        # D2_deviation has no dedicated chunk → resolved dynamically (see below)
+    }
+
+    # For these prefixes, all sub-sections share the parent-level coaching chunk
+    PARENT_HINT_PREFIXES: tuple = ("D3", "D4", "D5", "D6", "D7", "D8")
+
     def get_step_coaching_content(self, step_code: str) -> str:
-        section_hint = f"{step_code}_coaching_validation"
+        SEP = "=" * 60
         query = text("""
             SELECT k.content
             FROM kb_chunks k
@@ -146,23 +171,89 @@ class KnowledgeBaseRetriever:
             AND f.purpose = 'ikb'
             LIMIT 1
         """)
-        result = self.db.execute(query, {"section_hint": section_hint}).fetchone()
-        if not result or not result[0]:
-            parent_code = step_code.split("_")[0]
-            if parent_code != step_code:
-                fallback_hint = f"{parent_code}_coaching_validation"
-                fallback = self.db.execute(
-                    query, {"section_hint": fallback_hint}
-                ).fetchone()
-                if fallback and fallback[0]:
+
+        def _fetch(hint: str) -> Optional[str]:
+            row = self.db.execute(query, {"section_hint": hint}).fetchone()
+            return row[0] if row and row[0] else None
+
+        parent_code = step_code.split("_")[0]   # e.g. "D4" from "D4_four_m_occurrence"
+
+        # ── 1. Explicit map (D2_five_w_2h, D2_is_is_not) ─────────────────────
+        if step_code in self.SECTION_HINT_MAP:
+            hint = self.SECTION_HINT_MAP[step_code]
+            content = _fetch(hint)
+            if content:
+                logger.info(
+                    "\n%s\n📚 [KB COACHING] step_code='%s'\n"
+                    "   strategy : EXPLICIT MAP\n"
+                    "   hint     : %s\n"
+                    "   chars    : %d\n%s",
+                    SEP, step_code, hint, len(content), SEP,
+                )
+                return content
+            logger.warning(
+                "⚠️  [KB COACHING] Explicit hint '%s' not found in DB for '%s'",
+                hint, step_code,
+            )
+
+        # ── 2. Parent-level shared chunk (D3_* … D8_*) ────────────────────────
+        if parent_code in self.PARENT_HINT_PREFIXES:
+            hint = f"{parent_code}_coaching_validation"
+            content = _fetch(hint)
+            if content:
+                logger.info(
+                    "\n%s\n📚 [KB COACHING] step_code='%s'\n"
+                    "   strategy : PARENT SHARED CHUNK\n"
+                    "   hint     : %s\n"
+                    "   chars    : %d\n"
+                    "   note     : model will use the sub-section relevant part\n%s",
+                    SEP, step_code, hint, len(content), SEP,
+                )
+                return content
+            logger.warning(
+                "⚠️  [KB COACHING] Parent hint '%s' not found in DB for '%s'",
+                hint, parent_code,
+            )
+
+        # ── 3. D2_deviation fallback chain: D2_five_w_2h → D2 parent ─────────
+        if step_code == "D2_deviation":
+            for fallback_hint in (
+                "D2_five_w_2h_coaching_validation",
+                "D2_coaching_validation",
+            ):
+                content = _fetch(fallback_hint)
+                if content:
                     logger.warning(
-                        "⚠️ No section-specific coaching for '%s', falling back to '%s'",
-                        section_hint, fallback_hint,
+                        "\n%s\n⚠️  [KB COACHING] step_code='D2_deviation' has no dedicated chunk.\n"
+                        "   strategy : FALLBACK → %s\n"
+                        "   chars    : %d\n%s",
+                        SEP, fallback_hint, len(content), SEP,
                     )
-                    return fallback[0]
-            raise ValueError(f"No coaching content found for {step_code} (hint: {section_hint})")
-        logger.info("📚 Coaching loaded for %s (%d chars)", step_code, len(result[0]))
-        return result[0]
+                    return content
+
+        # ── 4. Generic fallback: step_code_coaching_validation ────────────────
+        hint = f"{step_code}_coaching_validation"
+        content = _fetch(hint)
+        if content:
+            logger.info(
+                "\n%s\n📚 [KB COACHING] step_code='%s'\n"
+                "   strategy : GENERIC FALLBACK\n"
+                "   hint     : %s\n"
+                "   chars    : %d\n%s",
+                SEP, step_code, hint, len(content), SEP,
+            )
+            return content
+
+        # ── Nothing found ─────────────────────────────────────────────────────
+        tried = [
+            self.SECTION_HINT_MAP.get(step_code, "—"),
+            f"{parent_code}_coaching_validation",
+            f"{step_code}_coaching_validation",
+        ]
+        raise ValueError(
+            f"No coaching content found for '{step_code}'. "
+            f"Hints tried: {tried}"
+        )
 
     def get_twenty_rules(self) -> str:
         query = text("""
@@ -209,7 +300,7 @@ class KnowledgeBaseRetriever:
 
 
 # ============================================================
-# STEP DATA FORMATTER  (unchanged from previous version)
+# STEP DATA FORMATTER
 # ============================================================
 
 def _val(v: Any, fallback: str = "—") -> str:
@@ -635,20 +726,26 @@ class StepDataFormatter:
 
 # ============================================================
 # SECTION-SPECIFIC PASS CRITERIA
-# Explicit, non-negotiable minimums given to the AI per section.
-# These prevent the AI from setting its own arbitrary bar.
 # ============================================================
 
 SECTION_PASS_CRITERIA: Dict[str, str] = {
-    # D2
-
+    # D2 — D2_five_w_2h ASSOUPLI (v2)
     "D2_five_w_2h": """
 MINIMUM PASS CRITERIA for this section:
-- Problem description must be specific (not generic like "quality issue")
-- At least 5 of the 7 5W2H fields must be filled
-- "What" and "Where" are mandatory — fail immediately if either is blank or generic
-- "How Much/Many" must include a number (quantity, %, ppm, etc.)
-- Answers must be specific to this complaint context, not copy-paste boilerplate
+
+- The problem description should clearly identify a specific object or process.
+  If partially defined but understandable, flag as incomplete rather than fail.
+
+- At least 5 of the 7 5W2H fields should be filled.
+  If 4 are filled but reasoning is coherent, classify as incomplete.
+
+- "What" and "Where" should be clearly defined.
+  If vague but interpretable, request clarification instead of failing.
+
+- "How Much/Many" should ideally contain a numeric value.
+  If qualitative but still informative, flag as quality issue.
+
+- Answers must remain specific to the complaint context.
 """,
     "D2_deviation": """
 MINIMUM PASS CRITERIA for this section:
@@ -765,33 +862,56 @@ MINIMUM PASS CRITERIA for this section:
 - A closure statement that is one sentence or fewer should be flagged as insufficient
 """,
 }
+
+
+# ============================================================
+# SYSTEM PROMPT — Balanced Industrial Coach (v2)
+# ============================================================
+
+SYSTEM_PROMPT = """You are a senior 8D Quality Coach with 20+ years of experience in automotive and manufacturing environments.
+
+You validate a SINGLE SECTION of an 8D report.
+
+You are rigorous but constructive.
+Your role is to elevate the engineer's thinking — not to punish.
+
+CALIBRATION:
+
+- PASS = The section is understandable, usable, and logically coherent,
+  even if improvements are possible.
+
+- FAIL = The section is unusable due to major missing,
+  non-measurable, or logically inconsistent information.
+
+COACHING PRINCIPLES:
+
+- Prefer PASS with quality issues rather than FAIL,
+  unless a truly blocking condition exists.
+
+- Minor lack of precision should generate improvement suggestions,
+  not automatic rejection.
+
+- If intent is clear and partially measurable,
+  guide improvement instead of failing.
+
+- When in doubt between PASS and FAIL,
+  choose PASS with clear improvement guidance.
+
+INTERNAL CHECK (do not output reasoning):
+
+1. Compare the submitted data with the MINIMUM PASS CRITERIA.
+2. Attempt to mentally reformulate the section into a clear,
+   measurable and auditable industrial statement.
+3. If this is possible with minor improvements → PASS.
+4. Only FAIL if reformulation is impossible due to missing core data.
+
+You must return ONLY valid JSON. No text outside the JSON.
+"""
+
+
 # ============================================================
 # PROMPT BUILDER
 # ============================================================
-
-# System prompt: rich persona and calibration instructions live here,
-# freeing the user message to focus purely on the data and task.
-SYSTEM_PROMPT = """You are a senior 8D Quality Coach with 20+ years of experience in automotive,
-manufacturing, and process industries. You have validated thousands of 8D reports and
-know exactly what separates a superficial response from a rigorous one.
-
-Your role is to validate a SINGLE SECTION of an 8D report submitted by a quality engineer.
-You are demanding but fair. You do not fail people for missing optional details.
-You DO fail people for vague language, missing mandatory data, or answers that are
-copy-paste boilerplate with no connection to the actual complaint.
-
-CALIBRATION — your scoring must be consistent:
-- A PASS means: a competent quality auditor reviewing this section would accept it as complete
-  and specific enough to act on. Not perfect — acceptable.
-- A FAIL means: the section has at least one BLOCKING issue that would prevent a real
-  quality auditor from accepting it (missing mandatory field, too vague to be actionable,
-  logically inconsistent with the complaint).
-
-NEVER fail a section for stylistic preferences or optional fields.
-NEVER pass a section that has a mandatory field empty or filled with generic boilerplate.
-
-You must return ONLY valid JSON. No preamble, no explanation outside the JSON."""
-
 
 class PromptBuilder:
     @staticmethod
@@ -817,12 +937,6 @@ class PromptBuilder:
 
     @staticmethod
     def _get_relevant_rules(step_code: str, twenty_rules: str) -> str:
-        """
-        Only include the 20 Rules block for sections where floor compliance
-        is actually relevant. Avoids diluting the prompt for documentation sections.
-        """
-        # Rules are most relevant for D3 (containment), D4 (process analysis),
-        # D6 (implementation on the floor) — less so for D2 description or D7/D8 closure
         floor_relevant = {
             "D3_defected_parts", "D3_suspected_parts", "D3_restart",
             "D4_four_m_occurrence", "D4_four_m_non_detection",
@@ -847,102 +961,141 @@ the content above. Do not speculate or invent violations.
         complaint: Dict,
         step_data: Dict,
     ) -> str:
-        formatted_complaint = PromptBuilder.format_complaint_context(complaint)
-        formatted_data      = PromptBuilder.format_step_data(step_code, step_data)
-        rules_section       = PromptBuilder._get_relevant_rules(step_code, twenty_rules)
-        pass_criteria       = SECTION_PASS_CRITERIA.get(step_code, "")
+        SEP = "=" * 70
 
-        # Human-readable label: "D6_monitoring_checklist" → "D6 / Monitoring Checklist"
+        # ── BLOC 1 : Complaint context ────────────────────────────────────────
+        formatted_complaint = PromptBuilder.format_complaint_context(complaint)
+        logger.info(
+            "\n%s\n📋 [PROMPT BLOCK 1/5] COMPLAINT CONTEXT  (%s)\n%s\n%s",
+            SEP, step_code, SEP, formatted_complaint,
+        )
+
+        # ── BLOC 2 : Step data (formatted) ────────────────────────────────────
+        formatted_data = PromptBuilder.format_step_data(step_code, step_data)
+        logger.info(
+            "\n%s\n📝 [PROMPT BLOCK 2/5] FORMATTED STEP DATA  (%s)\n%s\n%s",
+            SEP, step_code, SEP, formatted_data,
+        )
+
+        # ── BLOC 3 : Floor rules (only for relevant sections) ─────────────────
+        rules_section = PromptBuilder._get_relevant_rules(step_code, twenty_rules)
+        if rules_section:
+            logger.info(
+                "\n%s\n📏 [PROMPT BLOCK 3/5] FLOOR RULES INJECTED  (%s)\n%s\n%s",
+                SEP, step_code, SEP, rules_section,
+            )
+        else:
+            logger.info(
+                "📏 [PROMPT BLOCK 3/5] FLOOR RULES → skipped (not relevant for %s)",
+                step_code,
+            )
+
+        # ── BLOC 4 : Pass criteria ────────────────────────────────────────────
+        pass_criteria = SECTION_PASS_CRITERIA.get(step_code, "")
+        if pass_criteria:
+            logger.info(
+                "\n%s\n✅ [PROMPT BLOCK 4/5] PASS CRITERIA  (%s)\n%s\n%s",
+                SEP, step_code, SEP, pass_criteria,
+            )
+        else:
+            logger.warning(
+                "⚠️  [PROMPT BLOCK 4/5] PASS CRITERIA → NOT FOUND for step_code '%s'",
+                step_code,
+            )
+
+        # ── BLOC 5 : Coaching ─────────────────────────────────────────────────
+        logger.info(
+            "\n%s\n🎓 [PROMPT BLOCK 5/5] COACHING CONTENT  (%s)  [%d chars]\n%s\n%s",
+            SEP, step_code, len(coaching), SEP, coaching,
+        )
+
         parts = step_code.split("_", 1)
         display_code = f"{parts[0]} / {parts[1].replace('_', ' ').title()}" if len(parts) == 2 else step_code
 
         return f"""
 ## SECTION BEING VALIDATED: {display_code}
 
-{"-" * 60}
+------------------------------------------------------------
 ## COACHING REFERENCE FOR THIS SECTION
-(This is what a correct and complete response should look like)
 
 {coaching}
-{"-" * 60}
+------------------------------------------------------------
 
 {formatted_complaint}
-{"-" * 60}
+------------------------------------------------------------
 
 {rules_section}
 
 ## DATA SUBMITTED BY THE USER
 {formatted_data}
 
-{"-" * 60}
+------------------------------------------------------------
 {pass_criteria}
-{"-" * 60}
+------------------------------------------------------------
 
 ## EVALUATION INSTRUCTIONS
 
-Evaluate ONLY the data shown above. Do not penalise for fields belonging to
-other sections — those are validated separately.
+Evaluate ONLY the data shown above.
 
 Be firm but fair:
-- Do NOT fail for small phrasing issues, grammar, or formatting.
-- If content is relevant and complaint-specific but slightly lacking detail,
-  classify it as a QUALITY ISSUE rather than an automatic FAIL.
-- Only FAIL when a true blocking condition exists.
-- If the logic is coherent and actionable, lean toward PASS with improvement suggestions.
-- The severity of the decision must match the severity of the issue.
+- Do NOT fail for grammar or formatting.
+- If partially measurable and understandable → QUALITY ISSUE.
+- Only FAIL if the section is industrially unusable.
+- If logic is coherent and actionable, lean toward PASS.
 
-Work through these checks in order:
+Work in this order:
 
-1. BLOCKING ISSUES (any one of these → immediate FAIL):
-   - A mandatory field listed in the pass criteria is empty or contains only "—"
-   - An answer is generic boilerplate with no connection to the complaint context
-   - A logical chain (e.g. 5 Whys) is broken or circular
-   - A quantitative field that must have a number is blank
+1. BLOCKING ISSUES (FAIL only if unusable):
+   - Mandatory field completely missing
+   - No measurable information at all
+   - Logical contradiction
+   - Pure generic boilerplate unrelated to complaint
 
-2. QUALITY ISSUES (flag but not necessarily blocking):
-   - Answers exist but lack specificity or measurable detail
-   - Named persons are missing where expected (department name used instead)
-   - Dates are vague ("soon", "TBD")
+   If partial measurable data exists → classify as QUALITY ISSUE instead.
 
-3. POSITIVE NOTES:
-   - Where the response genuinely meets or exceeds the standard, say so briefly
-     in overall_assessment — this helps the user understand what good looks like
+2. QUALITY ISSUES:
+   - Answers exist but lack precision
+   - Named persons missing where expected
+   - Dates vague (TBD, ASAP)
+
+Before making final decision:
+
+- Attempt to rewrite the section into a clear,
+  measurable, and verifiable industrial statement.
+- If possible with reasonable improvements → PASS.
+- Only FAIL if impossible.
+
+------------------------------------------------------------
 
 ## OUTPUT FORMAT — return this JSON and nothing else:
 
 {{
     "decision": "pass" or "fail",
-    "missing_fields": [
-        "field_name — brief reason why it is missing or empty"
-    ],
-    "incomplete_fields": [
-        "field_name — what specific detail is lacking and why it matters"
-    ],
-    "quality_issues": [
-        "Specific issue with specific field — e.g. 'Root cause states \\"operator error\\" which is not a systemic cause'"
-    ],
-    "rules_violations": [
-        "Rule N violated: explain exactly what in the response triggers this"
-    ],
-    "suggestions": [
-        "Actionable suggestion — one concrete thing the user should change or add"
-    ],
+    "missing_fields": [],
+    "incomplete_fields": [],
+    "quality_issues": [],
+    "rules_violations": [],
+    "suggestions": [],
     "field_improvements": {{
-        "field_name": "A rewritten version of this field at the quality level required — 1-3 sentences max, grounded in the complaint context"
+        "field_name": "Provide an improved professional version. 1–3 sentences max. Measurable and complaint-specific."
     }},
-    "overall_assessment": "2-4 sentence summary: what is good, what is blocking, and what the user must fix to pass. Be specific, not generic.",
+    "overall_assessment": "2–4 sentence industrial summary explaining what is acceptable and what must improve.",
     "language_detected": "en"
 }}
 
-STRICT OUTPUT RULES:
-- field_improvements values must be 1–3 sentences, grounded in the actual complaint
-- overall_assessment must name the specific section and specific issues — never generic
-- If decision is "pass", missing_fields and incomplete_fields must be empty lists
-- Respond in the same language the user wrote in (check the submitted data language)
+STRICT RULES:
+- If decision = "pass", missing_fields and incomplete_fields must be empty.
+- If decision = "fail", at least one field_improvements entry is mandatory.
+- Even if PASS, provide improvements when quality issues exist.
+- overall_assessment must reference the specific section.
+- Respond in the same language as the submitted data.
 """
+
+
 # ============================================================
 # OPENAI CLIENT
 # ============================================================
+
 class OpenAIClient:
     def __init__(self):
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
@@ -964,13 +1117,10 @@ class OpenAIClient:
             response = self.client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": SYSTEM_PROMPT,
-                    },
+                    {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=settings.OPENAI_TEMPERATURE,
+                temperature=settings.OPENAI_TEMPERATURE,  # doit être 0.2 dans settings
                 max_tokens=settings.OPENAI_MAX_TOKENS,
                 response_format={"type": "json_object"},
                 timeout=30,
@@ -981,9 +1131,12 @@ class OpenAIClient:
         except OpenAIError as e:
             logger.error("❌ OpenAI API error: %s", str(e))
             raise RuntimeError(f"OpenAI validation failed: {str(e)}")
+
+
 # ============================================================
 # RESPONSE PARSER
 # ============================================================
+
 class ResponseParser:
     @staticmethod
     def parse(ai_text: str) -> Dict:
@@ -1011,9 +1164,12 @@ class ResponseParser:
             "overall_assessment": data.get("overall_assessment", ""),
             "language_detected": data.get("language_detected", "en"),
         }
+
+
 # ============================================================
 # VALIDATION STORAGE
 # ============================================================
+
 class ValidationStorage:
     def __init__(self, db: Session):
         self.db = db
@@ -1055,10 +1211,14 @@ class ValidationStorage:
                 validated_at          = datetime.now(timezone.utc),
             ))
 
+
 # ============================================================
 # STEPS THAT USE LOCAL VALIDATION
 # ============================================================
+
 LOCAL_VALIDATION_STEPS = {"D1"}
+
+
 # ============================================================
 # MAIN CHATBOT SERVICE
 # ============================================================
@@ -1131,12 +1291,23 @@ class ChatbotService:
         report_step_id: int,
         step_data: Dict,
     ) -> Dict:
-        logger.info("🤖 Running AI validation for %s", step_code)
+        SEP = "=" * 70
+        logger.info("\n%s\n🚦 [AI VALIDATION START]  step_code=%s  report_step_id=%d\n%s",
+                    SEP, step_code, report_step_id, SEP)
 
-        coaching     = self.kb.get_step_coaching_content(step_code)
+        # ── KB fetch : coaching ───────────────────────────────────────────────
+        coaching = self.kb.get_step_coaching_content(step_code)
+        logger.info("📚 [KB] Coaching fetched  →  %d chars", len(coaching))
+
+        # ── KB fetch : 20 rules ───────────────────────────────────────────────
         twenty_rules = self.kb.get_twenty_rules()
-        complaint    = self.kb.get_complaint_context(report_step_id)
+        logger.info("📏 [KB] Twenty rules fetched  →  %d chars", len(twenty_rules) if twenty_rules else 0)
 
+        # ── KB fetch : complaint ──────────────────────────────────────────────
+        complaint = self.kb.get_complaint_context(report_step_id)
+        logger.info("📋 [KB] Complaint context fetched  →  keys=%s", list(complaint.keys()) if complaint else "EMPTY")
+
+        # ── Prompt assembly (each block logged inside build_enriched_validation_prompt) ──
         prompt = self.prompt.build_enriched_validation_prompt(
             step_code=step_code,
             coaching=coaching,
@@ -1144,9 +1315,26 @@ class ChatbotService:
             complaint=complaint,
             step_data=step_data,
         )
-        
+
+        logger.info(
+            "\n%s\n📨 [FINAL PROMPT SENT TO OPENAI]  step_code=%s  total_chars=%d\n%s\n%s",
+            SEP, step_code, len(prompt), SEP, prompt,
+        )
+
+        # ── OpenAI call ───────────────────────────────────────────────────────
         ai_raw = self.ai.validate_step(prompt)
-        return self.parser.parse(ai_raw)
+
+        logger.info(
+            "\n%s\n📩 [OPENAI RAW RESPONSE]  step_code=%s\n%s\n%s",
+            SEP, step_code, SEP, ai_raw,
+        )
+
+        parsed = self.parser.parse(ai_raw)
+        logger.info(
+            "\n%s\n🏁 [PARSED RESULT]  step_code=%s  decision=%s\n%s",
+            SEP, step_code, parsed.get("decision", "???"), SEP,
+        )
+        return parsed
 
     def health_check(self) -> Dict:
         try:
