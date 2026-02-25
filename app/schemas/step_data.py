@@ -26,7 +26,7 @@ class FiveW2H(BaseModel):
     """Analyse 4W2H du problème"""
     what: Optional[str] = Field(None, description="Quel défaut ?")
     where: Optional[str] = Field(None, description="Où ?")
-    when: Optional[dt_date] = Field(None, description="Quand ?")
+    when: Optional[str] = Field(None, description="Quand ?")
     who: Optional[str] = Field(None, description="Qui a détecté ?")
     how: Optional[str] = Field(None, description="Comment détecté ?")
     how_many: Optional[str] = Field(None, description="Quantité ? (avec unité)")

@@ -21,7 +21,8 @@ from app.services.section_config import (
     get_all_section_keys,
 )
 
-
+import logging
+logger = logging.getLogger(__name__)
 STEP_SCHEMAS = {
     'D1': D1Data,
     'D2': D2Data,
