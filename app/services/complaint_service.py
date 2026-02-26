@@ -9,7 +9,7 @@ from app.models.complaint import Complaint
 from app.models.report import Report
 from app.models.report_step import ReportStep
 from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
-from app.services import webhook_service
+# from app.services import webhook_service
 from app.services.utils.report_helpers import generate_report_number, get_8d_steps_definitions
 
 def generate_complaint_number():
@@ -151,25 +151,25 @@ class ComplaintService:
         # Send webhook notification for updates
         event_type = "complaint.closed" if status_changed_to_closed else "complaint.updated"
         
-        webhook_service.send_webhook_background(
-            event_type=event_type,
-            complaint_data={
-                "id": complaint.id,
-                "reference_number": complaint.reference_number,
-                "complaint_name": complaint.complaint_name,
-                "status": complaint.status,
-                "severity": complaint.severity,
-                "priority": complaint.priority,
-                "due_date": complaint.due_date.isoformat() if complaint.due_date else None,
-                "closed_at": complaint.closed_at.isoformat() if complaint.closed_at else None,
-                "created_at": complaint.created_at.isoformat(),
-                "updated_at": complaint.updated_at.isoformat(),
-                "customer": complaint.customer,
-                "product_line": complaint.product_line.value if complaint.product_line else None
-            },
-            complaint_id=complaint.id,
-            db=db
-        )
+        # webhook_service.send_webhook_background(
+        #     event_type=event_type,
+        #     complaint_data={
+        #         "id": complaint.id,
+        #         "reference_number": complaint.reference_number,
+        #         "complaint_name": complaint.complaint_name,
+        #         "status": complaint.status,
+        #         "severity": complaint.severity,
+        #         "priority": complaint.priority,
+        #         "due_date": complaint.due_date.isoformat() if complaint.due_date else None,
+        #         "closed_at": complaint.closed_at.isoformat() if complaint.closed_at else None,
+        #         "created_at": complaint.created_at.isoformat(),
+        #         "updated_at": complaint.updated_at.isoformat(),
+        #         "customer": complaint.customer,
+        #         "product_line": complaint.product_line.value if complaint.product_line else None
+        #     },
+        #     complaint_id=complaint.id,
+        #     db=db
+        # )
 
         return complaint
 
