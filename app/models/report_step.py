@@ -16,7 +16,7 @@ class ReportStep(Base):
     report_id = Column(Integer, ForeignKey('reports.id', ondelete='CASCADE'), nullable=False, index=True)
     step_code = Column(String(10), nullable=False, comment="D1|D2|D3|D4|D5|D6|D7|D8")
     step_name = Column(String(255), nullable=False)
-    status = Column(String(50), nullable=False, default='draft', index=True, comment="draft|submitted|validated|rejected")
+    status = Column(String(50), nullable=False, default='draft', index=True, comment="draft|fulfilled")
     data = Column(JSONB, comment="Flexible JSON storage for step-specific data")
     completed_by = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'))
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
@@ -27,7 +27,6 @@ class ReportStep(Base):
     # Relationships
     report = relationship("Report", back_populates="steps")
     completer = relationship("User", foreign_keys=[completed_by], back_populates="completed_steps")
-    validation = relationship("StepValidation", back_populates="report_step", uselist=False)
     step_files = relationship("StepFile", back_populates="report_step", cascade="all, delete-orphan")
     conversations = relationship(
         "StepConversation",

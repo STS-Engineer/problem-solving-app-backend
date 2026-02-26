@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from openai import OpenAI, OpenAIError
 from app.core.config import settings
-from app.models.step_validation import StepValidation
 
 logger = logging.getLogger(__name__)
 
@@ -1166,50 +1165,50 @@ class ResponseParser:
         }
 
 
-# ============================================================
-# VALIDATION STORAGE
-# ============================================================
+# # ============================================================
+# # VALIDATION STORAGE
+# # ============================================================
 
-class ValidationStorage:
-    def __init__(self, db: Session):
-        self.db = db
+# class ValidationStorage:
+#     def __init__(self, db: Session):
+#         self.db = db
 
-    def store_validation(self, report_step_id: int, data: Dict) -> None:
-        missing_fields     = list(data.get("missing_fields", []))
-        incomplete_fields  = list(data.get("incomplete_fields", []))
-        quality_issues     = list(data.get("quality_issues", []))
-        rules_violations   = list(data.get("rules_violations", []))
-        suggestions        = list(data.get("suggestions", []))
-        field_improvements = data.get("field_improvements", {})
-        overall_assessment = str(data.get("overall_assessment", ""))
+#     def store_validation(self, report_step_id: int, data: Dict) -> None:
+#         missing_fields     = list(data.get("missing_fields", []))
+#         incomplete_fields  = list(data.get("incomplete_fields", []))
+#         quality_issues     = list(data.get("quality_issues", []))
+#         rules_violations   = list(data.get("rules_violations", []))
+#         suggestions        = list(data.get("suggestions", []))
+#         field_improvements = data.get("field_improvements", {})
+#         overall_assessment = str(data.get("overall_assessment", ""))
 
-        combined_issues: list = incomplete_fields + quality_issues + rules_violations
-        rewrite_json: str = json.dumps(field_improvements, ensure_ascii=False)
+#         combined_issues: list = incomplete_fields + quality_issues + rules_violations
+#         rewrite_json: str = json.dumps(field_improvements, ensure_ascii=False)
 
-        existing: Optional[StepValidation] = (
-            self.db.query(StepValidation)
-            .filter(StepValidation.report_step_id == report_step_id)
-            .first()
-        )
-        if existing:
-            existing.decision             = data["decision"]
-            existing.missing              = missing_fields
-            existing.issues               = combined_issues
-            existing.suggestions          = suggestions
-            existing.professional_rewrite = rewrite_json
-            existing.notes                = overall_assessment
-            existing.validated_at         = datetime.now(timezone.utc)
-        else:
-            self.db.add(StepValidation(
-                report_step_id        = report_step_id,
-                decision              = data["decision"],
-                missing               = missing_fields,
-                issues                = combined_issues,
-                suggestions           = suggestions,
-                professional_rewrite  = rewrite_json,
-                notes                 = overall_assessment,
-                validated_at          = datetime.now(timezone.utc),
-            ))
+#         existing: Optional[StepValidation] = (
+#             self.db.query(StepValidation)
+#             .filter(StepValidation.report_step_id == report_step_id)
+#             .first()
+#         )
+#         if existing:
+#             existing.decision             = data["decision"]
+#             existing.missing              = missing_fields
+#             existing.issues               = combined_issues
+#             existing.suggestions          = suggestions
+#             existing.professional_rewrite = rewrite_json
+#             existing.notes                = overall_assessment
+#             existing.validated_at         = datetime.now(timezone.utc)
+#         else:
+#             self.db.add(StepValidation(
+#                 report_step_id        = report_step_id,
+#                 decision              = data["decision"],
+#                 missing               = missing_fields,
+#                 issues                = combined_issues,
+#                 suggestions           = suggestions,
+#                 professional_rewrite  = rewrite_json,
+#                 notes                 = overall_assessment,
+#                 validated_at          = datetime.now(timezone.utc),
+#             ))
 
 
 # ============================================================
@@ -1219,149 +1218,149 @@ class ValidationStorage:
 LOCAL_VALIDATION_STEPS = {"D1"}
 
 
-# ============================================================
-# MAIN CHATBOT SERVICE
-# ============================================================
+# # ============================================================
+# # MAIN CHATBOT SERVICE
+# # ============================================================
 
-class ChatbotService:
-    def __init__(self, db: Session):
-        self.db           = db
-        self.kb           = KnowledgeBaseRetriever(db)
-        self.prompt       = PromptBuilder()
-        self.ai           = OpenAIClient()
-        self.parser       = ResponseParser()
-        self.storage      = ValidationStorage(db)
-        self.d1_validator = D1LocalValidator()
+# class ChatbotService:
+#     def __init__(self, db: Session):
+#         self.db           = db
+#         self.kb           = KnowledgeBaseRetriever(db)
+#         self.prompt       = PromptBuilder()
+#         self.ai           = OpenAIClient()
+#         self.parser       = ResponseParser()
+#         # self.storage      = ValidationStorage(db)
+#         self.d1_validator = D1LocalValidator()
 
-    def validate_step(
-        self,
-        report_step_id: int,
-        step_code: str,
-        step_data: Optional[Dict] = None,
-    ) -> Dict:
-        logger.info("🚀 Starting validation for %s (ID: %d)", step_code, report_step_id)
+#     def validate_step(
+#         self,
+#         report_step_id: int,
+#         step_code: str,
+#         step_data: Optional[Dict] = None,
+#     ) -> Dict:
+#         logger.info("🚀 Starting validation for %s (ID: %d)", step_code, report_step_id)
 
-        base_code = step_code.split("_")[0]
-        is_section_call = step_code != base_code
+#         base_code = step_code.split("_")[0]
+#         is_section_call = step_code != base_code
 
-        if not step_data and not is_section_call:
-            logger.info("📖 Reading step_data from database...")
-            from sqlalchemy import text as sa_text
-            query = sa_text("SELECT data FROM report_steps WHERE id = :step_id")
-            result = self.db.execute(query, {"step_id": report_step_id}).fetchone()
-            if not result:
-                raise ValueError(f"Report step {report_step_id} not found")
-            if not result[0]:
-                raise ValueError(
-                    f"No data in report_steps.data for step {report_step_id}. "
-                    "Please save the step first."
-                )
-            step_data = result[0]
-            logger.info("✅ Step data loaded from DB (%d fields)", len(step_data))
+#         if not step_data and not is_section_call:
+#             logger.info("📖 Reading step_data from database...")
+#             from sqlalchemy import text as sa_text
+#             query = sa_text("SELECT data FROM report_steps WHERE id = :step_id")
+#             result = self.db.execute(query, {"step_id": report_step_id}).fetchone()
+#             if not result:
+#                 raise ValueError(f"Report step {report_step_id} not found")
+#             if not result[0]:
+#                 raise ValueError(
+#                     f"No data in report_steps.data for step {report_step_id}. "
+#                     "Please save the step first."
+#                 )
+#             step_data = result[0]
+#             logger.info("✅ Step data loaded from DB (%d fields)", len(step_data))
 
-        if not step_data:
-            raise ValueError(f"No step_data provided for section validation of {step_code}")
+#         if not step_data:
+#             raise ValueError(f"No step_data provided for section validation of {step_code}")
 
-        if base_code in LOCAL_VALIDATION_STEPS:
-            validation = self._validate_locally(base_code, step_data)
-        else:
-            validation = self._validate_with_ai(step_code, report_step_id, step_data)
+#         if base_code in LOCAL_VALIDATION_STEPS:
+#             validation = self._validate_locally(base_code, step_data)
+#         else:
+#             validation = self._validate_with_ai(step_code, report_step_id, step_data)
 
-        if not is_section_call:
-            try:
-                self.storage.store_validation(report_step_id, validation)
-                self.db.commit()
-            except Exception:
-                self.db.rollback()
-                logger.exception("❌ DB transaction failed during store_validation")
-                raise
+#         if not is_section_call:
+#             try:
+#                 # self.storage.store_validation(report_step_id, validation)
+#                 self.db.commit()
+#             except Exception:
+#                 self.db.rollback()
+#                 logger.exception("❌ DB transaction failed during store_validation")
+#                 raise
 
-        logger.info("✅ Validation completed: %s", validation["decision"])
-        return validation
+#         logger.info("✅ Validation completed: %s", validation["decision"])
+#         return validation
 
-    def _validate_locally(self, step_code: str, step_data: Dict) -> Dict:
-        logger.info("🔍 Running LOCAL validation for %s", step_code)
-        if step_code == "D1":
-            return self.d1_validator.validate(step_data)
-        raise ValueError(f"No local validator implemented for {step_code}")
+#     def _validate_locally(self, step_code: str, step_data: Dict) -> Dict:
+#         logger.info("🔍 Running LOCAL validation for %s", step_code)
+#         if step_code == "D1":
+#             return self.d1_validator.validate(step_data)
+#         raise ValueError(f"No local validator implemented for {step_code}")
 
-    def _validate_with_ai(
-        self,
-        step_code: str,
-        report_step_id: int,
-        step_data: Dict,
-    ) -> Dict:
-        SEP = "=" * 70
-        logger.info("\n%s\n🚦 [AI VALIDATION START]  step_code=%s  report_step_id=%d\n%s",
-                    SEP, step_code, report_step_id, SEP)
+#     def _validate_with_ai(
+#         self,
+#         step_code: str,
+#         report_step_id: int,
+#         step_data: Dict,
+#     ) -> Dict:
+#         SEP = "=" * 70
+#         logger.info("\n%s\n🚦 [AI VALIDATION START]  step_code=%s  report_step_id=%d\n%s",
+#                     SEP, step_code, report_step_id, SEP)
 
-        # ── KB fetch : coaching ───────────────────────────────────────────────
-        coaching = self.kb.get_step_coaching_content(step_code)
-        logger.info("📚 [KB] Coaching fetched  →  %d chars", len(coaching))
+#         # ── KB fetch : coaching ───────────────────────────────────────────────
+#         coaching = self.kb.get_step_coaching_content(step_code)
+#         logger.info("📚 [KB] Coaching fetched  →  %d chars", len(coaching))
 
-        # ── KB fetch : 20 rules ───────────────────────────────────────────────
-        twenty_rules = self.kb.get_twenty_rules()
-        logger.info("📏 [KB] Twenty rules fetched  →  %d chars", len(twenty_rules) if twenty_rules else 0)
+#         # ── KB fetch : 20 rules ───────────────────────────────────────────────
+#         twenty_rules = self.kb.get_twenty_rules()
+#         logger.info("📏 [KB] Twenty rules fetched  →  %d chars", len(twenty_rules) if twenty_rules else 0)
 
-        # ── KB fetch : complaint ──────────────────────────────────────────────
-        complaint = self.kb.get_complaint_context(report_step_id)
-        logger.info("📋 [KB] Complaint context fetched  →  keys=%s", list(complaint.keys()) if complaint else "EMPTY")
+#         # ── KB fetch : complaint ──────────────────────────────────────────────
+#         complaint = self.kb.get_complaint_context(report_step_id)
+#         logger.info("📋 [KB] Complaint context fetched  →  keys=%s", list(complaint.keys()) if complaint else "EMPTY")
 
-        # ── Prompt assembly (each block logged inside build_enriched_validation_prompt) ──
-        prompt = self.prompt.build_enriched_validation_prompt(
-            step_code=step_code,
-            coaching=coaching,
-            twenty_rules=twenty_rules,
-            complaint=complaint,
-            step_data=step_data,
-        )
+#         # ── Prompt assembly (each block logged inside build_enriched_validation_prompt) ──
+#         prompt = self.prompt.build_enriched_validation_prompt(
+#             step_code=step_code,
+#             coaching=coaching,
+#             twenty_rules=twenty_rules,
+#             complaint=complaint,
+#             step_data=step_data,
+#         )
 
-        logger.info(
-            "\n%s\n📨 [FINAL PROMPT SENT TO OPENAI]  step_code=%s  total_chars=%d\n%s\n%s",
-            SEP, step_code, len(prompt), SEP, prompt,
-        )
+#         logger.info(
+#             "\n%s\n📨 [FINAL PROMPT SENT TO OPENAI]  step_code=%s  total_chars=%d\n%s\n%s",
+#             SEP, step_code, len(prompt), SEP, prompt,
+#         )
 
-        # ── OpenAI call ───────────────────────────────────────────────────────
-        ai_raw = self.ai.validate_step(prompt)
+#         # ── OpenAI call ───────────────────────────────────────────────────────
+#         ai_raw = self.ai.validate_step(prompt)
 
-        logger.info(
-            "\n%s\n📩 [OPENAI RAW RESPONSE]  step_code=%s\n%s\n%s",
-            SEP, step_code, SEP, ai_raw,
-        )
+#         logger.info(
+#             "\n%s\n📩 [OPENAI RAW RESPONSE]  step_code=%s\n%s\n%s",
+#             SEP, step_code, SEP, ai_raw,
+#         )
 
-        parsed = self.parser.parse(ai_raw)
-        logger.info(
-            "\n%s\n🏁 [PARSED RESULT]  step_code=%s  decision=%s\n%s",
-            SEP, step_code, parsed.get("decision", "???"), SEP,
-        )
-        return parsed
+#         parsed = self.parser.parse(ai_raw)
+#         logger.info(
+#             "\n%s\n🏁 [PARSED RESULT]  step_code=%s  decision=%s\n%s",
+#             SEP, step_code, parsed.get("decision", "???"), SEP,
+#         )
+#         return parsed
 
-    def health_check(self) -> Dict:
-        try:
-            from sqlalchemy import text as sa_text
-            count = self.db.execute(sa_text("""
-                SELECT COUNT(*) FROM kb_chunks
-                WHERE section_hint LIKE '%_coaching_validation'
-            """)).scalar()
-            rules_exist = self.db.execute(sa_text("""
-                SELECT EXISTS(
-                    SELECT 1 FROM kb_chunks
-                    WHERE section_hint = 'floor_rules_guidelines'
-                )
-            """)).scalar()
-            return {
-                "status": "healthy",
-                "service": "chatbot",
-                "kb_chunks_available": count,
-                "twenty_rules_loaded": rules_exist,
-                "message": "D1=local, D2-D8=per-section AI",
-            }
-        except Exception as e:
-            logger.error("Health check failed: %s", str(e))
-            return {
-                "status": "unhealthy",
-                "service": "chatbot",
-                "kb_chunks_available": 0,
-                "twenty_rules_loaded": False,
-                "message": str(e),
-            }
+#     def health_check(self) -> Dict:
+#         try:
+#             from sqlalchemy import text as sa_text
+#             count = self.db.execute(sa_text("""
+#                 SELECT COUNT(*) FROM kb_chunks
+#                 WHERE section_hint LIKE '%_coaching_validation'
+#             """)).scalar()
+#             rules_exist = self.db.execute(sa_text("""
+#                 SELECT EXISTS(
+#                     SELECT 1 FROM kb_chunks
+#                     WHERE section_hint = 'floor_rules_guidelines'
+#                 )
+#             """)).scalar()
+#             return {
+#                 "status": "healthy",
+#                 "service": "chatbot",
+#                 "kb_chunks_available": count,
+#                 "twenty_rules_loaded": rules_exist,
+#                 "message": "D1=local, D2-D8=per-section AI",
+#             }
+#         except Exception as e:
+#             logger.error("Health check failed: %s", str(e))
+#             return {
+#                 "status": "unhealthy",
+#                 "service": "chatbot",
+#                 "kb_chunks_available": 0,
+#                 "twenty_rules_loaded": False,
+#                 "message": str(e),
+#             }

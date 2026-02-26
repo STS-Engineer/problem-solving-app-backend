@@ -147,7 +147,7 @@ class ConversationResponse(BaseModel):
     step_id: int
     section_key: str
     messages: list
-    state: str  # opening | collecting | ready_to_validate
+    state: str  
 
 
 class SendMessageResponse(BaseModel):
@@ -310,7 +310,12 @@ async def upload_conversation_files(
         results.append(_serialize_file(step_file))
 
     db.commit()
-
+    # After db.commit() in upload_conversation_files:
+    if section_key == "deviation":
+        from app.services.conversation_service import ConversationService
+        svc = ConversationService(db)
+        file_names = svc._get_step_file_names(step_id)
+        svc._update_step_data(step_id, {"evidence_documents": ", ".join(file_names)})
     return {
         "uploaded": results,
         "filenames": [r["filename"] for r in results],
