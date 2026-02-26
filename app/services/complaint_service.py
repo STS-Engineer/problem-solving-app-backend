@@ -1,12 +1,15 @@
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 import random
 import string
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.models.complaint import Complaint
 from app.models.report import Report
 from app.models.report_step import ReportStep
 from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
+from app.services import webhook_service
 from app.services.utils.report_helpers import generate_report_number, get_8d_steps_definitions
 
 def generate_complaint_number():
@@ -31,6 +34,18 @@ class ComplaintService:
         # 1. Créer la plainte
         complaint = Complaint(**payload.model_dump())
         complaint.reference_number = generate_complaint_number()
+        
+        # Calculate due date (e.g., 30 days from creation for medium severity)
+        # if not complaint.due_date:
+        #     days_to_resolve = {
+        #         'low': 45,
+        #         'medium': 30,
+        #         'high': 14,
+        #         'critical': 7
+        #     }
+        #     days = days_to_resolve.get(complaint.severity, 30)
+        #     complaint.due_date = datetime.now(timezone.utc) + timedelta(days=days)
+        
         db.add(complaint)
         db.flush()  # Pour obtenir l'ID de la plainte
         
@@ -60,6 +75,26 @@ class ComplaintService:
         
         db.commit()
         db.refresh(complaint)
+        
+        # 4. Send webhook notification (async, non-blocking)
+        # webhook_service.send_webhook_background(
+        #     event_type="complaint.created",
+        #     complaint_data={
+        #         "id": complaint.id,
+        #         "reference_number": complaint.reference_number,
+        #         "complaint_name": complaint.complaint_name,
+        #         "status": complaint.status,
+        #         "severity": complaint.severity,
+        #         "priority": complaint.priority,
+        #         "due_date": complaint.due_date.isoformat() if complaint.due_date else None,
+        #         "created_at": complaint.created_at.isoformat(),
+        #         "updated_at": complaint.updated_at.isoformat(),
+        #         "customer": complaint.customer,
+        #         "product_line": complaint.product_line.value if complaint.product_line else None
+        #     },
+        #     complaint_id=complaint.id,
+        #     db=db
+        # )
         return complaint
     
     @staticmethod
@@ -100,12 +135,42 @@ class ComplaintService:
             return None
 
         data = payload.model_dump(exclude_unset=True)
+
+        #Track if status changed to closed
+        status_changed_to_closed = False
+        if 'status' in data and data['status'] == 'closed' and complaint.status != 'closed':
+            status_changed_to_closed = True
+            data['closed_at'] = datetime.now(timezone.utc)
+
         for key, value in data.items():
             setattr(complaint, key, value)
 
         db.add(complaint)
         db.commit()
         db.refresh(complaint)
+        # Send webhook notification for updates
+        event_type = "complaint.closed" if status_changed_to_closed else "complaint.updated"
+        
+        webhook_service.send_webhook_background(
+            event_type=event_type,
+            complaint_data={
+                "id": complaint.id,
+                "reference_number": complaint.reference_number,
+                "complaint_name": complaint.complaint_name,
+                "status": complaint.status,
+                "severity": complaint.severity,
+                "priority": complaint.priority,
+                "due_date": complaint.due_date.isoformat() if complaint.due_date else None,
+                "closed_at": complaint.closed_at.isoformat() if complaint.closed_at else None,
+                "created_at": complaint.created_at.isoformat(),
+                "updated_at": complaint.updated_at.isoformat(),
+                "customer": complaint.customer,
+                "product_line": complaint.product_line.value if complaint.product_line else None
+            },
+            complaint_id=complaint.id,
+            db=db
+        )
+
         return complaint
 
     @staticmethod
@@ -117,3 +182,37 @@ class ComplaintService:
         db.delete(complaint)
         db.commit()
         return True
+    
+    @staticmethod
+    def get_complaints_for_sync(
+            db: Session,
+            since: Optional[datetime] = None
+        ) -> List[Complaint]:
+            """
+            Get complaints for polling/sync endpoint
+            Returns:
+            - Complaints created/updated after 'since'
+            - Complaints that are overdue (status != closed and due_date < now)
+            - Complaints where webhook failed (webhook_sent = False)
+            """
+            now = datetime.now(timezone.utc)
+            
+            if since is None:
+                since = now - timedelta(hours=24)  # Default: last 24 hours
+            
+            query = db.query(Complaint).filter(
+                or_(
+                    # New or updated complaints
+                    Complaint.created_at >= since,
+                    Complaint.updated_at >= since,
+                    # Overdue open complaints
+                    and_(
+                        Complaint.status != 'closed',
+                        Complaint.due_date < now
+                    ),
+                    # Failed webhooks
+                    Complaint.webhook_sent == False
+                )
+            )
+            
+            return query.order_by(Complaint.created_at.desc()).all()

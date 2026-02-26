@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -31,7 +31,8 @@ class ComplaintBase(BaseModel):
     status: Optional[str] = Field("open", max_length=50)
     severity: Optional[str] = Field("medium", max_length=20)
     priority: Optional[str] = Field("normal", max_length=20)
-
+    
+    due_date: Optional[datetime] = None
 
 class ComplaintCreate(ComplaintBase):
     # the authenticated user is the reporter; we still accept it explicitly for now
@@ -63,6 +64,8 @@ class ComplaintUpdate(BaseModel):
     priority: Optional[str] = Field(None, max_length=20)
     resolved_at: Optional[datetime] = None
 
+    # due_date: Optional[datetime] = None
+    # closed_at: Optional[datetime] = None
 
 class ComplaintRead(ComplaintBase):
     id: int
@@ -94,5 +97,13 @@ class ComplaintListItem(BaseModel):
     created_at: datetime
     potential_avocarbon_process_linked_to_problem: Optional[str]
 
+    class Config:
+        from_attributes = True
+
+class ComplaintSyncResponse(BaseModel):
+    complaints: List[ComplaintRead]
+    count: int
+    next_poll_after: str
+    
     class Config:
         from_attributes = True
