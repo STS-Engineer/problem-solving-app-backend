@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.api.deps import get_db
-from app.services.report_export_service import ReportExportService
+# from app.services.report_export_service import ReportExportService
 from app.services.step_service import StepService
 from app.schemas.report import *
 
@@ -53,25 +53,25 @@ def get_current_step_by_complaint(
     }
 
 
-@router.get("/{report_id}/export")
-def export_report(
-    report_id: int,
-    db: Session = Depends(get_db),
-):
-    """
-    Generate and download the complete filled 8D Excel report.
-    All step data (D1-D8) is pulled from the DB and written into the template.
-    """
-    try:
-        file_bytes = ReportExportService.generate_excel(db, report_id)
-        filename   = ReportExportService.get_filename(db, report_id)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+# @router.get("/{report_id}/export")
+# def export_report(
+#     report_id: int,
+#     db: Session = Depends(get_db),
+# ):
+#     """
+#     Generate and download the complete filled 8D Excel report.
+#     All step data (D1-D8) is pulled from the DB and written into the template.
+#     """
+#     try:
+#         file_bytes = ReportExportService.generate_excel(db, report_id)
+#         filename   = ReportExportService.get_filename(db, report_id)
+#     except ValueError as e:
+#         raise HTTPException(status_code=404, detail=str(e))
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
 
-    return StreamingResponse(
-        io.BytesIO(file_bytes),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+#     return StreamingResponse(
+#         io.BytesIO(file_bytes),
+#         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+#         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+#     )
