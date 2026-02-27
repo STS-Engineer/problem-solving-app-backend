@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, Integer, String,  DateTime, ForeignKey, Index,
+    Boolean, Column, Integer, String,  DateTime, ForeignKey, Index,
     UniqueConstraint, 
 )
 from sqlalchemy.orm import relationship
@@ -23,7 +23,14 @@ class ReportStep(Base):
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     completed_at = Column(DateTime)
-    
+
+    due_date = Column(DateTime, nullable=True, index=True,         comment="SLA-based deadline for this step")
+    is_overdue = Column(Boolean,nullable=False,server_default="false", comment="True once the due_date has passed without completion")
+    escalation_count = Column(Integer, nullable=False, server_default="0", comment="Number of escalation emails sent (0–4)")
+    escalation_sent_at = Column(DateTime, nullable=True, comment="Timestamp of the most recent escalation email")
+    cost = Column(Integer, nullable=True, comment="Cost attributed to this step")
+
+
     # Relationships
     report = relationship("Report", back_populates="steps")
     completer = relationship("User", foreign_keys=[completed_by], back_populates="completed_steps")

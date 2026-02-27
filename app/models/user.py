@@ -24,8 +24,6 @@ class User(Base):
     
     # Relationships
     reported_complaints = relationship("Complaint", foreign_keys="Complaint.reported_by", back_populates="reporter")
-    assigned_complaints = relationship("Complaint", foreign_keys="Complaint.assigned_to", back_populates="assignee")
-    managed_complaints = relationship("Complaint", foreign_keys="Complaint.quality_manager", back_populates="manager")
     created_reports = relationship("Report", foreign_keys="Report.created_by", back_populates="creator")
     reviewed_reports = relationship("Report", foreign_keys="Report.reviewed_by", back_populates="reviewer")
     completed_steps = relationship("ReportStep", foreign_keys="ReportStep.completed_by", back_populates="completer")

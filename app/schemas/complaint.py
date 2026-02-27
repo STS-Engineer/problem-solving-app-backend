@@ -24,12 +24,13 @@ class ComplaintBase(BaseModel):
 
     complaint_description: Optional[str] = None
     defects: Optional[str] = Field(None, max_length=255)
-    quality_manager: Optional[int] = None
     repetitive_complete_with_number: Optional[str] = None
 
-    assigned_to: Optional[int] = None
+    cqt_email: Optional[str] = None
+    quality_manager_email: Optional[str] = None
+    plant_manager_email: Optional[str] = None
+    approved_by_email: Optional[str] = None
     status: Optional[str] = Field("open", max_length=50)
-    severity: Optional[str] = Field("medium", max_length=20)
     priority: Optional[str] = Field("normal", max_length=20)
     
     due_date: Optional[datetime] = None
@@ -58,7 +59,7 @@ class ComplaintUpdate(BaseModel):
     quality_manager: Optional[int] = None
     repetitive_complete_with_number: Optional[str] = None
 
-    assigned_to: Optional[int] = None
+    cqt_email: Optional[str] = None
     status: Optional[str] = Field(None, max_length=50)
     severity: Optional[str] = Field(None, max_length=20)
     priority: Optional[str] = Field(None, max_length=20)
@@ -72,7 +73,7 @@ class ComplaintRead(ComplaintBase):
     reported_by: int
     created_at: datetime
     updated_at: datetime
-    resolved_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
     reference_number: str
     class Config:
         from_attributes = True
