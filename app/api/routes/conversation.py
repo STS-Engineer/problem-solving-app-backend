@@ -4,21 +4,10 @@ Conversation endpoints for interactive chatbot coaching.
 
 GET    /api/v1/steps/{step_id}/conversation/{section_key}
 POST   /api/v1/steps/{step_id}/conversation/{section_key}
-POST   /api/v1/steps/{step_id}/conversation/{section_key}/upload
+POST   /api/v1/steps/{step_id}/conversation/{section_key}/upload  ← NEW
 DELETE /api/v1/steps/{step_id}/conversation/{section_key}
 GET    /api/v1/steps/{step_id}/conversations
-
-Audit events written:
-  send_message (first fill)  → step_filled    (performed_by = CQT email)
-  send_message (re-fill)     → step_updated   (performed_by = CQT email)
-  reset_conversation         → step_reopened  (performed_by = CQT email)
-
-Intentionally NOT logged (noise, not signal):
-  - file uploads     (file_uploaded)
-  - bot-only replies (comment_added)
 """
-
-from __future__ import annotations
 
 import hashlib
 import mimetypes
@@ -39,18 +28,10 @@ from app.models.step_file import StepFile
 from app.services.conversation_service import ConversationService
 from app.services.chatbot_service import KnowledgeBaseRetriever
 
-from app.services.audit_service import (
-    _complaint_id_for_step,
-    _report_id_for_step,
-    log_step_filled_sync,
-    log_step_updated_sync,
-    log_step_reopened_sync,
-)
-
 router = APIRouter()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# File upload config
+# File upload config (mirrors step_files router)
 # ─────────────────────────────────────────────────────────────────────────────
 
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "./uploads/evidence"))
@@ -112,37 +93,6 @@ def _serialize_file(sf: StepFile) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Audit helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _step_code_for_id(db: Session, step_id: int) -> str | None:
-    row = db.execute(
-        sa_text("SELECT step_code FROM report_steps WHERE id = :id"),
-        {"id": step_id},
-    ).fetchone()
-    return str(row[0]) if row else None
-
-
-def _cqt_email_for_step(db: Session, step_id: int) -> str | None:
-    """
-    Resolve cqt_email from the complaint that owns this step.
-    Chain: report_steps → reports → complaints → cqt_email.
-    Returns None silently if any link is missing.
-    """
-    row = db.execute(
-        sa_text(
-            "SELECT c.cqt_email "
-            "FROM report_steps rs "
-            "JOIN reports r ON r.id = rs.report_id "
-            "JOIN complaints c ON c.id = r.complaint_id "
-            "WHERE rs.id = :step_id"
-        ),
-        {"step_id": step_id},
-    ).fetchone()
-    return str(row[0]) if row and row[0] else None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Guards
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -169,8 +119,6 @@ VALID_SECTION_KEYS = {
     "implementation", "monitoring_checklist",
     "prevention", "knowledge", "lessons_learned",
     "closure",
-    # Legacy
-    "root_cause", "corrective_actions",
 }
 
 
@@ -189,6 +137,8 @@ def _require_section(section_key: str) -> None:
 
 class SendMessageRequest(BaseModel):
     message: str
+    # Filenames of files that were just uploaded via the /upload endpoint
+    # in the same "send" action.  The service injects them into the AI context.
     uploaded_file_names: Optional[List[str]] = None
 
 
@@ -196,7 +146,7 @@ class ConversationResponse(BaseModel):
     step_id: int
     section_key: str
     messages: list
-    state: str
+    state: str  
 
 
 class SendMessageResponse(BaseModel):
@@ -228,8 +178,6 @@ def get_conversation(
     return svc.get_or_start_conversation(step_id, section_key)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-
 @router.post(
     "/{step_id}/conversation/{section_key}",
     response_model=SendMessageResponse,
@@ -241,6 +189,7 @@ def send_message(
     body: SendMessageRequest,
     db: Session = Depends(get_db),
 ):
+    # Allow empty text message when files are being referenced
     if not body.message.strip() and not body.uploaded_file_names:
         raise HTTPException(status_code=422, detail="Message cannot be empty")
 
@@ -251,13 +200,8 @@ def send_message(
     complaint_context = kb.get_complaint_context(step_id)
 
     svc = ConversationService(db)
-
-    # Snapshot state BEFORE the service processes the message so we can diff
-    existing_data: dict[str, Any] = svc.get_current_step_data(step_id) or {}
-    previous_state: str = svc.get_conversation_state(step_id, section_key) or "opening"
-
     try:
-        response: dict = svc.send_message(
+        return svc.send_message(
             step_id=step_id,
             section_key=section_key,
             user_message=body.message.strip(),
@@ -269,73 +213,6 @@ def send_message(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
-    # ── Audit: only log when real field data was extracted ────────────────────
-    # Pure bot replies with no extracted fields are intentionally ignored.
-    extracted: dict[str, Any] = response.get("extracted_fields") or {}
-    new_state: str = response.get("state") or "collecting"
-
-    if extracted:
-        try:
-            complaint_id = _complaint_id_for_step(db, step_id)
-            report_id    = _report_id_for_step(db, step_id)
-            step_code    = _step_code_for_id(db, step_id)
-            cqt_email    = _cqt_email_for_step(db, step_id)
-
-            changed = [k for k, v in extracted.items() if existing_data.get(k) != v]
-
-            # First-time fulfillment: no prior data, step just reached fulfilled
-            first_fill = (
-                previous_state != "fulfilled"
-                and new_state == "fulfilled"
-                and not existing_data
-            )
-
-            if first_fill:
-                log_step_filled_sync(
-                    db,
-                    complaint_id,
-                    report_id,
-                    step_id,
-                    step_code or section_key,
-                    fields_snapshot=extracted,
-                    performed_by_email=cqt_email,
-                )
-            elif changed:
-                log_step_updated_sync(
-                    db,
-                    complaint_id,
-                    report_id,
-                    step_id,
-                    step_code or section_key,
-                    changed_fields=changed,
-                    old_values={k: existing_data.get(k) for k in changed},
-                    new_values={k: extracted[k] for k in changed},
-                    performed_by_email=cqt_email,
-                )
-
-            db.commit()
-
-        except Exception as audit_exc:
-            import sys
-            print(
-                f"[audit] WARNING: failed to write audit log for step {step_id}: {audit_exc}",
-                file=sys.stderr,
-            )
-            try:
-                db.rollback()
-            except Exception:
-                pass
-    else:
-        # No fields extracted — still commit the conversation update from the service
-        try:
-            db.commit()
-        except Exception:
-            pass
-
-    return response
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/{step_id}/conversation/{section_key}/upload",
@@ -349,8 +226,12 @@ async def upload_conversation_files(
 ):
     """
     Upload one or more evidence files while chatting.
-    File uploads are not individually audit-logged (too granular/noisy).
-    The step_filled / step_updated events capture what matters at the D-step level.
+
+    The frontend calls this BEFORE sending the accompanying text message,
+    then passes the returned filenames in `uploaded_file_names` on the
+    POST /conversation/{section_key} request so the AI sees them.
+
+    Returns a list of file records (same shape as the step_files router).
     """
     _require_step(step_id, db)
     _require_section(section_key)
@@ -396,10 +277,12 @@ async def upload_conversation_files(
                 detail=f"MIME type '{mime_type}' is not allowed.",
             )
 
+        # Save to disk
         stored_name = f"{uuid.uuid4().hex}{ext}"
         dest = _upload_dir() / stored_name
         dest.write_bytes(content)
 
+        # Insert file record
         db_file = FileModel(
             purpose       ="evidence",
             original_name =original_name,
@@ -413,6 +296,7 @@ async def upload_conversation_files(
         db.add(db_file)
         db.flush()
 
+        # Link to step
         step_file = StepFile(
             report_step_id=step_id,
             file_id       =db_file.id,
@@ -424,20 +308,18 @@ async def upload_conversation_files(
 
         results.append(_serialize_file(step_file))
 
+    db.commit()
+    # After db.commit() in upload_conversation_files:
     if section_key == "deviation":
+        from app.services.conversation_service import ConversationService
         svc = ConversationService(db)
         file_names = svc._get_step_file_names(step_id)
         svc._update_step_data(step_id, {"evidence_documents": ", ".join(file_names)})
-
-    db.commit()
-
     return {
         "uploaded": results,
         "filenames": [r["filename"] for r in results],
     }
 
-
-# ─────────────────────────────────────────────────────────────────────────────
 
 @router.delete(
     "/{step_id}/conversation/{section_key}",
@@ -451,42 +333,9 @@ def reset_conversation(
 ):
     _require_step(step_id, db)
     _require_section(section_key)
-
     svc = ConversationService(db)
-    result = svc.reset_conversation(step_id, section_key)
+    return svc.reset_conversation(step_id, section_key)
 
-    # Reopening a fulfilled step is meaningful — someone is correcting data
-    try:
-        complaint_id = _complaint_id_for_step(db, step_id)
-        report_id    = _report_id_for_step(db, step_id)
-        step_code    = _step_code_for_id(db, step_id)
-        cqt_email    = _cqt_email_for_step(db, step_id)
-
-        log_step_reopened_sync(
-            db,
-            complaint_id,
-            report_id,
-            step_id,
-            step_code or section_key,
-            section_key=section_key,
-            performed_by_email=cqt_email,
-        )
-        db.commit()
-    except Exception as audit_exc:
-        import sys
-        print(
-            f"[audit] WARNING: failed to write step_reopened for step {step_id}: {audit_exc}",
-            file=sys.stderr,
-        )
-        try:
-            db.rollback()
-        except Exception:
-            pass
-
-    return result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 
 @router.get(
     "/{step_id}/conversations",

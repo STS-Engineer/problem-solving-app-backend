@@ -19,23 +19,18 @@ class ReportStep(Base):
     status = Column(String(50), nullable=False, default='draft', index=True, comment="draft|fulfilled")
     data = Column(JSONB, comment="Flexible JSON storage for step-specific data")
     completed_by = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'))
-    created_at       = Column(DateTime(timezone=True), nullable=False, index=True,
-                              default=lambda: datetime.now(timezone.utc))
-    updated_at       = Column(DateTime(timezone=True), nullable=False,
-                              default=lambda: datetime.now(timezone.utc),
-                              onupdate=lambda: datetime.now(timezone.utc))
-    completed_at     = Column(DateTime(timezone=True), nullable=True)
-    due_date         = Column(DateTime(timezone=True), nullable=True, index=True,
-                              comment="SLA-based deadline for this step")
-    escalation_sent_at = Column(DateTime(timezone=True), nullable=True,
-                                comment="Timestamp of the most recent escalation email")
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
-    is_overdue       = Column(Boolean, nullable=False, server_default="false",
-                              comment="True once the due_date has passed without completion")
-    escalation_count = Column(Integer, nullable=False, server_default="0",
-                              comment="Number of escalation emails sent (0–4)")
-    cost             = Column(Integer, nullable=True,
-                              comment="Cost attributed to this step")
+    completed_at = Column(DateTime)
+
+    due_date = Column(DateTime, nullable=True, index=True,         comment="SLA-based deadline for this step")
+    is_overdue = Column(Boolean,nullable=False,server_default="false", comment="True once the due_date has passed without completion")
+    escalation_count = Column(Integer, nullable=False, server_default="0", comment="Number of escalation emails sent (0–4)")
+    escalation_sent_at = Column(DateTime, nullable=True, comment="Timestamp of the most recent escalation email")
+    cost = Column(Integer, nullable=True, comment="Cost attributed to this step")
+
+
     # Relationships
     report = relationship("Report", back_populates="steps")
     completer = relationship("User", foreign_keys=[completed_by], back_populates="completed_steps")

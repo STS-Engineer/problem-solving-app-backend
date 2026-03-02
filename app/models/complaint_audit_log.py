@@ -48,7 +48,7 @@ class ComplaintAuditLog(Base):
                              comment="Delta/context — see EVENT SCHEMAS in module docstring")
 
     # ── Timestamp ─────────────────────────────────────────────────────────────
-    created_at      = Column(DateTime(timezone=True), nullable=False, index=True,
+    created_at      = Column(DateTime, nullable=False, index=True,
                              default=lambda: datetime.now(timezone.utc))
 
     # ── Relationships ──────────────────────────────────────────────────────────
