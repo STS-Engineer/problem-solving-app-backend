@@ -8,11 +8,11 @@ import logging
 
 from app.api.router import api_router
 from app.services.scheduler import start_scheduler, stop_scheduler
+  
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.info("smtplib configured with host=%s port=%s", os.getenv("SMTP_HOST"), os.getenv("SMTP_PORT"))
 # ── CORS ──────────────────────────────────────────────────────────────────────
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 

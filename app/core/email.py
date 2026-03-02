@@ -3,14 +3,17 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import logging
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
 
-SMTP_HOST = os.getenv("SMTP_HOST","avocarbon-com.mail.protection.outlook.com")
+load_dotenv() 
+
+SMTP_HOST = os.getenv("SMTP_HOST")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "25"))
-SMTP_USER = os.getenv("SMTP_USER","administration.STS@avocarbon.com")
-SMTP_PASS = os.getenv("SMTP_PASSWORD","shnlgdyfbcztbhxn")
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASS = os.getenv("SMTP_PASSWORD")
 
 
 async def send_email(

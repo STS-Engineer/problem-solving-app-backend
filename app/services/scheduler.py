@@ -18,7 +18,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.db.session import AsyncSessionLocal
 from app.services.escalation_service import check_and_escalate_all
+from dotenv import load_dotenv
 
+load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ── Test / Production mode ────────────────────────────────────────────────────
