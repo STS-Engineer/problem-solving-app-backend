@@ -2,13 +2,15 @@ import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-
-SMTP_HOST = os.getenv("SMTP_HOST")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASS = os.getenv("SMTP_PASSWORD")
+SMTP_HOST = os.getenv("SMTP_HOST","avocarbon-com.mail.protection.outlook.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "25"))
+SMTP_USER = os.getenv("SMTP_USER","administration.STS@avocarbon.com")
+SMTP_PASS = os.getenv("SMTP_PASSWORD","shnlgdyfbcztbhxn")
 
 
 async def send_email(
@@ -22,7 +24,8 @@ async def send_email(
     msg["From"] = SMTP_USER
     msg["To"] = ", ".join(recipients)
     msg["Subject"] = subject
- 
+    logger.info("SMTP config: host=%s port=%s user=%s pass_set=%s",
+                SMTP_HOST, SMTP_PORT, SMTP_USER, bool(SMTP_PASS))
     if cc:
         msg["Cc"] = ", ".join(cc)
  

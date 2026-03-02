@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 # ── Test / Production mode ────────────────────────────────────────────────────
 TEST_MODE = os.getenv("TEST_ESCALATION", "false").lower() == "true"
-CHECK_INTERVAL_MINUTES = 5 if TEST_MODE else 5
+CHECK_INTERVAL_MINUTES = 30 if TEST_MODE else 30
+
 
 # ── Singleton ─────────────────────────────────────────────────────────────────
 _scheduler: AsyncIOScheduler | None = None

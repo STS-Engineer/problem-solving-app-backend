@@ -287,11 +287,7 @@ def build_escalation_email(
               Do not reply to this email.
               If you believe you received this in error, contact your quality manager.
             </div>
-            <div style="font-family:monospace;font-size:10px;color:#3D5066;margin-top:8px">
-              Sent: {datetime.now(timezone.utc).strftime("%d %b %Y %H:%M UTC")}
-              &nbsp;&middot;&nbsp;
-              {complaint_reference} &middot; {step_code} &middot; L{level}
-            </div>
+          
           </td>
         </tr>
 

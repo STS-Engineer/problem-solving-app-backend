@@ -1,12 +1,11 @@
-
-
 from __future__ import annotations
+
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
-from app.db.session import get_db
+from app.api.deps import get_async_db
 from app.models.complaint import Complaint
 from app.models.complaint_audit_log import ComplaintAuditLog
 from app.models.report import Report
@@ -24,19 +23,26 @@ from app.schemas.complaint_logger import (
 router = APIRouter()
 
 
-# ─── SLA table ────────────────────────────────────────────────────────────────
+# ─── SLA table (calendar days → hours) ───────────────────────────────────────
+# Must stay in sync with complaint_service._STEP_SLA_DAYS
 
-_SLA: dict[str, int] = {
-    "D1": 24, "D2": 48, "D3": 72, "D4": 96,
-    "D5": 120, "D6": 144, "D7": 168, "D8": 240,
+_SLA_HOURS: dict[str, int] = {
+    "D1": 24,
+    "D2": 72,
+    "D3": 24,
+    "D4": 168,   # 7 days
+    "D5": 336,   # 14 days
+    "D6": 720,   # 30 days
+    "D7": 1080,  # 45 days
+    "D8": 1440,  # 60 days
 }
 
 
 def _sla_hours(code: str) -> int:
-    return _SLA.get(code, 24)
+    return _SLA_HOURS.get(code, 24)
 
 
-# ─── Serialisers ─────────────────────────────────────────────────────────────
+# ─── Serialisers ──────────────────────────────────────────────────────────────
 
 def _build_step_summary(steps: list[ReportStep]) -> list[StepSummary]:
     return [
@@ -46,9 +52,9 @@ def _build_step_summary(steps: list[ReportStep]) -> list[StepSummary]:
             status=s.status,
             due_date=s.due_date,
             completed_at=s.completed_at,
-            completed_by_email=None,          # extend when user FK added
+            completed_by_email=None,
             escalation_count=s.escalation_count or 0,
-            cost=None,                         # extend when cost column added
+            cost=None,
             hours_allowed=_sla_hours(s.step_code),
             is_overdue=getattr(s, "is_overdue", False),
         )
@@ -70,19 +76,30 @@ def _serialize_log(log: ComplaintAuditLog) -> AuditLogEntry:
     )
 
 
-# ─── GET /complaints/logger ───────────────────────────────────────────────────
+# ─── GET /logger ──────────────────────────────────────────────────────────────
 
 @router.get("/", response_model=ComplaintLoggerListResponse)
-def list_complaints_for_logger(            
+async def list_complaints_for_logger(
     search: str | None = Query(None),
     status: str | None = Query(None),
     plant: str | None = Query(None),
+    priority: str | None = Query(None),
+    customer: str | None = Query(None),
+    has_escalation: bool | None = Query(None, description="Filter complaints that have at least one escalation"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> ComplaintLoggerListResponse:
-    """Paginated complaint list with step summary and last-activity timestamp."""
+    """
+    Paginated complaint list with step summary and last-activity timestamp.
 
+    Filters:
+      - search: matches reference_number, complaint_name, customer
+      - status: complaint status
+      - plant: avocarbon_plant
+      - priority: critical / high / medium / low
+      - has_escalation: true → only complaints with ≥1 escalation sent
+    """
     base_q = (
         select(Complaint)
         .options(
@@ -98,20 +115,23 @@ def list_complaints_for_logger(
             Complaint.reference_number.ilike(like)
             | Complaint.complaint_name.ilike(like)
             | Complaint.customer.ilike(like)
+            | Complaint.customer.ilike(f"%{customer}%")
         )
     if status:
         base_q = base_q.where(Complaint.status == status)
     if plant:
         base_q = base_q.where(Complaint.avocarbon_plant == plant)
+    if priority:
+        base_q = base_q.where(Complaint.priority == priority)
 
-    count_result =  db.execute(        
+    # Count before pagination
+    count_result = await db.execute(
         select(func.count()).select_from(base_q.subquery())
     )
-    total: int = count_result.scalar_one()   
+    total: int = count_result.scalar_one()
 
-    # ── paginated data ────────────────────────────────────────────────────────
     paged_q = base_q.offset((page - 1) * page_size).limit(page_size)
-    result =  db.execute(paged_q)        
+    result = await db.execute(paged_q)
     complaints: list[Complaint] = result.scalars().unique().all()
 
     items: list[ComplaintLogItem] = []
@@ -122,13 +142,20 @@ def list_complaints_for_logger(
             if c.audit_logs else None
         )
         total_esc = sum(s.escalation_count or 0 for s in steps)
+
+        # Apply has_escalation filter post-load (simpler than a subquery join)
+        if has_escalation is True and total_esc == 0:
+            continue
+        if has_escalation is False and total_esc > 0:
+            continue
+
         items.append(
             ComplaintLogItem(
                 id=c.id,
                 reference_number=c.reference_number,
                 complaint_name=c.complaint_name,
                 customer=c.customer or "",
-                plant=str(c.avocarbon_plant) if c.avocarbon_plant else "",
+                plant=c.avocarbon_plant if c.avocarbon_plant else "",
                 status=c.status,
                 priority=c.priority,
                 cqt_email=c.cqt_email,
@@ -152,18 +179,18 @@ def list_complaints_for_logger(
     )
 
 
-# ─── GET /complaints/{id}/logs ────────────────────────────────────────────────
+# ─── GET /{complaint_id}/logs ─────────────────────────────────────────────────
 
 @router.get("/{complaint_id}/logs", response_model=ComplaintLogsResponse)
-def get_complaint_logs(
+async def get_complaint_logs(
     complaint_id: int,
     step_code: str | None = Query(None),
     event_type: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> ComplaintLogsResponse:
     """Full ordered audit log for a single complaint, optionally filtered."""
 
-    c_result =  db.execute(
+    c_result = await db.execute(
         select(Complaint).where(Complaint.id == complaint_id)
     )
     complaint = c_result.scalar_one_or_none()
@@ -180,7 +207,7 @@ def get_complaint_logs(
     if event_type:
         q = q.where(ComplaintAuditLog.event_type == event_type)
 
-    result =  db.execute(q)
+    result = await db.execute(q)
     logs = result.scalars().all()
 
     return ComplaintLogsResponse(
@@ -191,16 +218,16 @@ def get_complaint_logs(
     )
 
 
-# ─── GET /complaints/{id}/logs/steps ─────────────────────────────────────────
+# ─── GET /{complaint_id}/logs/steps ──────────────────────────────────────────
 
 @router.get("/{complaint_id}/logs/steps", response_model=StepLogsResponse)
-def get_complaint_step_logs(              # ← was missing `async`
+async def get_complaint_step_logs(
     complaint_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> StepLogsResponse:
     """Each step (D1–D8) with metadata + all audit log entries for that step."""
 
-    c_result = db.execute(               # ← was missing `await`
+    c_result = await db.execute(
         select(Complaint)
         .where(Complaint.id == complaint_id)
         .options(
@@ -214,7 +241,7 @@ def get_complaint_step_logs(              # ← was missing `async`
 
     steps = complaint.report.steps if complaint.report else []
 
-    # Group logs by step_code (None = complaint-level)
+    # Group logs by step_code (None → complaint-level)
     logs_by_step: dict[str | None, list[ComplaintAuditLog]] = {}
     for log in complaint.audit_logs:
         logs_by_step.setdefault(log.step_code, []).append(log)

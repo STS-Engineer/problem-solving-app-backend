@@ -17,14 +17,14 @@ Changes vs original:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.models.complaint_audit_log import ComplaintAuditLog
+from app.services.utils.datetime_utils import utc_now
 
 
 # ─── Shared entry builder ─────────────────────────────────────────────────────
@@ -47,7 +47,8 @@ def _build_entry(
         event_type=event_type,
         event_data=event_data or {},
         performed_by_email=performed_by_email,
-        created_at=datetime.now(timezone.utc),
+        created_at=utc_now(),
+
     )
 
 

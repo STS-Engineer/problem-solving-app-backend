@@ -9,11 +9,13 @@ DELETE /api/v1/steps/{step_id}/conversation/{section_key}
 GET    /api/v1/steps/{step_id}/conversations
 
 Audit events written:
-  upload_conversation_files  → file_uploaded      (one per file)
-  send_message (first fill)  → step_filled
-  send_message (re-fill)     → step_updated  (if extracted_fields differ)
-  send_message (no fields)   → comment_added (bot reply stored as a note)
-  reset_conversation         → step_reopened
+  send_message (first fill)  → step_filled    (performed_by = CQT email)
+  send_message (re-fill)     → step_updated   (performed_by = CQT email)
+  reset_conversation         → step_reopened  (performed_by = CQT email)
+
+Intentionally NOT logged (noise, not signal):
+  - file uploads     (file_uploaded)
+  - bot-only replies (comment_added)
 """
 
 from __future__ import annotations
@@ -37,15 +39,12 @@ from app.models.step_file import StepFile
 from app.services.conversation_service import ConversationService
 from app.services.chatbot_service import KnowledgeBaseRetriever
 
-# Sync audit helpers — conversation router uses sqlalchemy.orm.Session (sync)
 from app.services.audit_service import (
     _complaint_id_for_step,
     _report_id_for_step,
-    log_file_uploaded_sync,
     log_step_filled_sync,
     log_step_updated_sync,
     log_step_reopened_sync,
-    log_comment_added_sync,
 )
 
 router = APIRouter()
@@ -113,16 +112,34 @@ def _serialize_file(sf: StepFile) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Audit helpers (step metadata lookup)
+# Audit helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _step_code_for_id(db: Session, step_id: int) -> str | None:
-    """Resolve the step_code (D1–D8) for a given report_steps.id."""
     row = db.execute(
         sa_text("SELECT step_code FROM report_steps WHERE id = :id"),
         {"id": step_id},
     ).fetchone()
     return str(row[0]) if row else None
+
+
+def _cqt_email_for_step(db: Session, step_id: int) -> str | None:
+    """
+    Resolve cqt_email from the complaint that owns this step.
+    Chain: report_steps → reports → complaints → cqt_email.
+    Returns None silently if any link is missing.
+    """
+    row = db.execute(
+        sa_text(
+            "SELECT c.cqt_email "
+            "FROM report_steps rs "
+            "JOIN reports r ON r.id = rs.report_id "
+            "JOIN complaints c ON c.id = r.complaint_id "
+            "WHERE rs.id = :step_id"
+        ),
+        {"step_id": step_id},
+    ).fetchone()
+    return str(row[0]) if row and row[0] else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -145,34 +162,16 @@ def _require_step(step_id: int, db: Session) -> None:
         )
 
 
-# Keep router validation in sync with conversation_service SECTION_OPENING / schemas.
-# NOTE: include legacy keys if other UI parts still call them.
 VALID_SECTION_KEYS = {
-    # D1
     "team_members",
-
-    # D2
     "five_w_2h", "deviation", "is_is_not",
-
-    # D3
     "containment", "restart",
-
-    # D4
     "four_m_occurrence", "four_m_non_detection",
-
-    # D5
     "corrective_occurrence", "corrective_detection",
-
-    # D6
     "implementation", "monitoring_checklist",
-
-    # D7
     "prevention", "knowledge", "lessons_learned",
-
-    # D8
     "closure",
-
-    # Legacy / backwards compatibility (if old frontend still calls these)
+    # Legacy
     "root_cause", "corrective_actions",
 }
 
@@ -255,7 +254,7 @@ def send_message(
 
     svc = ConversationService(db)
 
-    # ── Snapshot existing fields BEFORE the update so we can diff ────────────
+    # Snapshot state BEFORE the service processes the message so we can diff
     existing_data: dict[str, Any] = svc.get_current_step_data(step_id) or {}
     previous_state: str = svc.get_conversation_state(step_id, section_key) or "opening"
 
@@ -272,22 +271,21 @@ def send_message(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
-    # ── Write audit log based on what the service extracted ──────────────────
-    try:
-        extracted: dict[str, Any] = response.get("extracted_fields") or {}
-        new_state: str = response.get("state") or "collecting"
-        bot_reply: str = response.get("bot_reply") or ""
+    # ── Audit: only log when real field data was extracted ────────────────────
+    # Pure bot replies with no extracted fields are intentionally ignored.
+    extracted: dict[str, Any] = response.get("extracted_fields") or {}
+    new_state: str = response.get("state") or "collecting"
 
-        # Resolve identifiers (best-effort; skip if resolution fails)
-        complaint_id = _complaint_id_for_step(db, step_id)
-        report_id    = _report_id_for_step(db, step_id)
-        step_code    = _step_code_for_id(db, step_id)
+    if extracted:
+        try:
+            complaint_id = _complaint_id_for_step(db, step_id)
+            report_id    = _report_id_for_step(db, step_id)
+            step_code    = _step_code_for_id(db, step_id)
+            cqt_email    = _cqt_email_for_step(db, step_id)
 
-        if extracted:
-            # Determine which fields actually changed (top-level keys)
             changed = [k for k, v in extracted.items() if existing_data.get(k) != v]
 
-            # Define "first fill" as: before = not fulfilled; after = fulfilled; and no prior persisted data
+            # First-time fulfillment: no prior data, step just reached fulfilled
             first_fill = (
                 previous_state != "fulfilled"
                 and new_state == "fulfilled"
@@ -302,11 +300,9 @@ def send_message(
                     step_id,
                     step_code or section_key,
                     fields_snapshot=extracted,
-                    performed_by_email=None,  # chatbot / user context unavailable here
+                    performed_by_email=cqt_email,
                 )
             elif changed:
-                old_values = {k: existing_data.get(k) for k in changed}
-                new_values = {k: extracted[k] for k in changed}
                 log_step_updated_sync(
                     db,
                     complaint_id,
@@ -314,30 +310,27 @@ def send_message(
                     step_id,
                     step_code or section_key,
                     changed_fields=changed,
-                    old_values=old_values,
-                    new_values=new_values,
-                    performed_by_email=None,
-                )
-        else:
-            if bot_reply.strip():
-                log_comment_added_sync(
-                    db,
-                    complaint_id,
-                    step_id=step_id,
-                    step_code=step_code,
-                    comment=f"[bot] {bot_reply.strip()[:500]}",
-                    performed_by_email=None,
+                    old_values={k: existing_data.get(k) for k in changed},
+                    new_values={k: extracted[k] for k in changed},
+                    performed_by_email=cqt_email,
                 )
 
-        # Single commit point for send_message (service only flushes)
-        db.commit()
+            db.commit()
 
-    except Exception as audit_exc:
-        # Audit failure must NEVER break the user-facing response.
-        import sys
-        print(f"[audit] WARNING: failed to write audit log for step {step_id}: {audit_exc}", file=sys.stderr)
+        except Exception as audit_exc:
+            import sys
+            print(
+                f"[audit] WARNING: failed to write audit log for step {step_id}: {audit_exc}",
+                file=sys.stderr,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    else:
+        # No fields extracted — still commit the conversation update from the service
         try:
-            db.rollback()
+            db.commit()
         except Exception:
             pass
 
@@ -358,27 +351,14 @@ async def upload_conversation_files(
 ):
     """
     Upload one or more evidence files while chatting.
-
-    The frontend calls this BEFORE sending the accompanying text message,
-    then passes the returned filenames in `uploaded_file_names` on the
-    POST /conversation/{section_key} request so the AI sees them.
-
-    Writes a file_uploaded audit log entry for each file.
-    Returns a list of file records (same shape as the step_files router).
+    File uploads are not individually audit-logged (too granular/noisy).
+    The step_filled / step_updated events capture what matters at the D-step level.
     """
     _require_step(step_id, db)
     _require_section(section_key)
 
     if not files:
         raise HTTPException(status_code=422, detail="No files provided")
-
-    # Resolve audit identifiers once (best-effort)
-    try:
-        complaint_id = _complaint_id_for_step(db, step_id)
-        step_code    = _step_code_for_id(db, step_id)
-    except Exception:
-        complaint_id = None
-        step_code    = None
 
     results = []
     for file in files:
@@ -418,12 +398,10 @@ async def upload_conversation_files(
                 detail=f"MIME type '{mime_type}' is not allowed.",
             )
 
-        # ── Save to disk ──────────────────────────────────────────────────────
         stored_name = f"{uuid.uuid4().hex}{ext}"
         dest = _upload_dir() / stored_name
         dest.write_bytes(content)
 
-        # ── Insert file record ────────────────────────────────────────────────
         db_file = FileModel(
             purpose       ="evidence",
             original_name =original_name,
@@ -437,7 +415,6 @@ async def upload_conversation_files(
         db.add(db_file)
         db.flush()
 
-        # ── Link to step ──────────────────────────────────────────────────────
         step_file = StepFile(
             report_step_id=step_id,
             file_id       =db_file.id,
@@ -447,23 +424,8 @@ async def upload_conversation_files(
         db.flush()
         db.refresh(step_file)
 
-        serialized = _serialize_file(step_file)
-        results.append(serialized)
+        results.append(_serialize_file(step_file))
 
-        # ── Write audit log entry for this file ───────────────────────────────
-        if complaint_id is not None:
-            log_file_uploaded_sync(
-                db,
-                complaint_id,
-                step_id,
-                step_code or section_key,
-                filename=original_name,
-                file_size=len(content),
-                mime_type=mime_type,
-                performed_by_email=None,  # extend when auth is available
-            )
-
-    # ── Update evidence_documents on the deviation section ───────────────────
     if section_key == "deviation":
         svc = ConversationService(db)
         file_names = svc._get_step_file_names(step_id)
@@ -495,11 +457,12 @@ def reset_conversation(
     svc = ConversationService(db)
     result = svc.reset_conversation(step_id, section_key)
 
-    # ── Audit: step_reopened ──────────────────────────────────────────────────
+    # Reopening a fulfilled step is meaningful — someone is correcting data
     try:
         complaint_id = _complaint_id_for_step(db, step_id)
         report_id    = _report_id_for_step(db, step_id)
         step_code    = _step_code_for_id(db, step_id)
+        cqt_email    = _cqt_email_for_step(db, step_id)
 
         log_step_reopened_sync(
             db,
@@ -508,12 +471,15 @@ def reset_conversation(
             step_id,
             step_code or section_key,
             section_key=section_key,
-            performed_by_email=None,
+            performed_by_email=cqt_email,
         )
         db.commit()
     except Exception as audit_exc:
         import sys
-        print(f"[audit] WARNING: failed to write step_reopened for step {step_id}: {audit_exc}", file=sys.stderr)
+        print(
+            f"[audit] WARNING: failed to write step_reopened for step {step_id}: {audit_exc}",
+            file=sys.stderr,
+        )
         try:
             db.rollback()
         except Exception:
