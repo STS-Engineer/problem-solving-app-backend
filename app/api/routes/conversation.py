@@ -160,8 +160,6 @@ def _require_step(step_id: int, db: Session) -> None:
                 "open the step form first to initialise it."
             ),
         )
-
-
 VALID_SECTION_KEYS = {
     "team_members",
     "five_w_2h", "deviation", "is_is_not",
