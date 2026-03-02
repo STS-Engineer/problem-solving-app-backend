@@ -12,10 +12,9 @@ Flow per section
 
 File uploads
 ────────────
-Files are uploaded separately via POST /steps/{step_id}/files (step_files router)
-or via the conversation upload endpoint. The conversation service receives
-a list of already-uploaded StepFile records (their filenames) so the AI can
-reference them in its reasoning.
+Files are uploaded separately via POST /steps/{step_id}/files (step_files router).
+The conversation service receives a list of already-uploaded StepFile records
+(their filenames) so the AI can reference them in its reasoning.
 """
 
 from __future__ import annotations
@@ -50,7 +49,7 @@ SECTION_OPENING: Dict[str, str] = {
         "**name**, ***Email address**, **department** (Production / Quality / Engineering / Maintenance / Logistics / Supplier Quality / Other) "
         "and **function** (Operator / Line Leader / Supervisor / Engineer / Team Leader / Project Manager / Other).\n\n"
         "You can list everyone at once or one by one — whichever is easier.\n\n"
-        "Start with the first member. Once you have provided at least 2 members "
+          "Start with the first member. Once you have provided at least 2 members "
         "and identified the team leader, I will complete the section automatically."
     ),
 
@@ -527,6 +526,7 @@ RULES:
     reference those filenames in evidence_documents field.
 """
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MERGE HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -590,7 +590,7 @@ VALID_FUNCTIONS = {
 def _normalise_member(raw: Dict) -> Dict:
     member: Dict[str, str] = {}
     for key, value in raw.items():
-        canonical_key = _FIELD_ALIASES.get(str(key).lower(), str(key).lower())
+        canonical_key = _FIELD_ALIASES.get(key.lower(), key.lower())
         member[canonical_key] = str(value).strip() if value else ""
 
     dept_raw = member.get("department", "").lower().strip()
@@ -631,6 +631,7 @@ def _merge_extracted(current: Dict, extracted: Dict) -> Dict:
             merged["five_w_2h"] = {**(merged.get("five_w_2h") or {}), **value}
 
         elif key == "suspected_parts_status" and isinstance(value, list):
+            # Merge by location key — preserve existing rows not mentioned
             existing = {r["location"]: r for r in (merged.get("suspected_parts_status") or [])}
             for row in value:
                 loc = row.get("location")
@@ -645,6 +646,7 @@ def _merge_extracted(current: Dict, extracted: Dict) -> Dict:
             merged[key] = {**(merged.get(key) or {}), **value}
 
         elif key in ("corrective_actions_occurrence", "corrective_actions_detection") and isinstance(value, list):
+            # Replace entirely — D5/D6 sends full list
             merged[key] = value
 
         elif key == "monitoring" and isinstance(value, dict):
@@ -666,6 +668,10 @@ def _merge_extracted(current: Dict, extracted: Dict) -> Dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _section_is_complete(section_key: str, extracted: Dict) -> bool:
+    """
+    Return True only when the extracted payload satisfies the minimum
+    requirements for the section.
+    """
     # ── D1 ────────────────────────────────────────────────────────────────────
     if section_key == "team_members":
         members = extracted.get("team_members", [])
@@ -702,7 +708,7 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
     if section_key == "containment":
         dps = extracted.get("defected_part_status", {})
         has_defected = isinstance(dps, dict) and any(
-            bool(v) for k, v in dps.items() if k in ("returned", "isolated", "identified")
+            v for k, v in dps.items() if k in ("returned", "isolated", "identified")
         )
         suspected = extracted.get("suspected_parts_status", [])
         has_suspected = isinstance(suspected, list) and any(
@@ -710,9 +716,9 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
         )
         alert_to = extracted.get("alert_communicated_to", {})
         has_alert = (
-            isinstance(alert_to, dict) and any(bool(v) for v in alert_to.values())
+            isinstance(alert_to, dict) and any(alert_to.values())
         ) or str(extracted.get("alert_number", "")).strip()
-        return (has_defected or has_suspected) and bool(has_alert)
+        return (has_defected or has_suspected) and has_alert
 
     if section_key == "restart":
         rp = extracted.get("restart_production", {})
@@ -758,14 +764,14 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
     if section_key == "corrective_occurrence":
         actions = extracted.get("corrective_actions_occurrence", [])
         return isinstance(actions, list) and any(
-            str(a.get("action", "")).strip() and str(a.get("responsible", "")).strip() and str(a.get("due_date", "")).strip()
+            str(a.get("action", "")).strip() and str(a.get("responsible", "")).strip()
             for a in actions if isinstance(a, dict)
         )
 
     if section_key == "corrective_detection":
         actions = extracted.get("corrective_actions_detection", [])
         return isinstance(actions, list) and any(
-            str(a.get("action", "")).strip() and str(a.get("responsible", "")).strip() and str(a.get("due_date", "")).strip()
+            str(a.get("action", "")).strip() and str(a.get("responsible", "")).strip()
             for a in actions if isinstance(a, dict)
         )
 
@@ -775,7 +781,7 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
         det = extracted.get("corrective_actions_detection", [])
         has_occ = isinstance(occ, list) and any(str(a.get("imp_date", "")).strip() for a in occ if isinstance(a, dict))
         has_det = isinstance(det, list) and any(str(a.get("imp_date", "")).strip() for a in det if isinstance(a, dict))
-        return bool(has_occ or has_det)
+        return has_occ or has_det
 
     if section_key == "monitoring_checklist":
         mon = extracted.get("monitoring", {})
@@ -797,13 +803,13 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
         ltm = extracted.get("long_term_monitoring", [])
         has_kb = isinstance(kb, list) and any(str(u.get("document_type", "")).strip() for u in kb if isinstance(u, dict))
         has_ltm = isinstance(ltm, list) and any(str(m.get("checkpoint_type", "")).strip() for m in ltm if isinstance(m, dict))
-        return bool(has_kb or has_ltm)
+        return has_kb or has_ltm
 
     if section_key == "lessons_learned":
         disem = extracted.get("lesson_disseminations", [])
         has_dissem = isinstance(disem, list) and any(str(d.get("audience_team", "")).strip() for d in disem if isinstance(d, dict))
-        has_conclusion = bool(str(extracted.get("ll_conclusion", "")).strip())
-        return bool(has_dissem and has_conclusion)
+        has_conclusion = str(extracted.get("ll_conclusion", "")).strip()
+        return has_dissem and bool(has_conclusion)
 
     # ── D8 ────────────────────────────────────────────────────────────────────
     if section_key == "closure":
@@ -816,6 +822,7 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
             and str(sigs.get("closure_date", "")).strip()
         )
 
+    # Unknown section — treat any extraction as completion signal
     return bool(extracted)
 
 
@@ -830,30 +837,19 @@ class ConversationService:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def get_current_step_data(self, step_id: int) -> Dict[str, Any]:
-        """Return current ReportStep.data for diffing/audit; never commits."""
-        from app.models.report_step import ReportStep  # avoid circular import
-        step = self.db.get(ReportStep, step_id)
-        return (step.data or {}) if step else {}
-
-    def get_conversation_state(self, step_id: int, section_key: str) -> str:
-        """Infer current state for this section from stored messages."""
-        messages = self._load_messages(step_id, section_key)
-        return self._infer_state(section_key, messages)
-
     def get_or_start_conversation(
         self,
         step_id: int,
         section_key: str,
     ) -> Dict[str, Any]:
-        """Return existing messages for a section, or start fresh (commits if it creates the opening)."""
+        """Return existing messages for a section, or start fresh."""
         messages = self._load_messages(step_id, section_key)
         if not messages:
             opening = SECTION_OPENING.get(
                 section_key,
                 "Let's fill in this section. Please provide the required information.",
             )
-            self._persist_message(step_id, section_key, "assistant", opening, 0, commit=True)
+            self._persist_message(step_id, section_key, "assistant", opening, 0)
             messages = [self._msg_dict("assistant", opening, 0)]
 
         return {
@@ -874,10 +870,10 @@ class ConversationService:
         """
         Process a user message: persist → call AI → persist reply → return.
 
-        IMPORTANT TRANSACTION RULE:
-        - This method FLUSHES changes but DOES NOT COMMIT.
-        - The caller (router) is responsible for committing, so audit logs can be committed together.
+        Extracted fields are immediately merged into step.data in the DB.
+        When all sections for the step are complete, step.status is set to 'fulfilled'.
         """
+        # Inject uploaded file info into user message text
         effective_message = user_message
         if uploaded_file_names:
             file_list = ", ".join(uploaded_file_names)
@@ -887,25 +883,27 @@ class ConversationService:
                 else f"📎 Uploaded: {file_list}"
             )
 
-        history = self._load_messages(step_id, section_key)
+        history  = self._load_messages(step_id, section_key)
         next_idx = len(history)
 
-        self._persist_message(step_id, section_key, "user", effective_message, next_idx, commit=False)
+        self._persist_message(step_id, section_key, "user", effective_message, next_idx)
         history.append(self._msg_dict("user", effective_message, next_idx))
         next_idx += 1
 
+        # Inject existing step-file names into context so AI knows what's on record
         existing_files = self._get_step_file_names(step_id)
         bot_reply = self._call_ai(
             section_key, history, complaint_context, existing_files
         )
 
         extracted = self._parse_extracted_fields(bot_reply)
-        meta = {"extracted_fields": extracted} if extracted else None
+        meta      = {"extracted_fields": extracted} if extracted else None
 
-        self._persist_message(step_id, section_key, "assistant", bot_reply, next_idx, meta=meta, commit=False)
+        self._persist_message(step_id, section_key, "assistant", bot_reply, next_idx, meta)
         history.append(self._msg_dict("assistant", bot_reply, next_idx, meta))
 
         if extracted:
+            # For deviation section: merge uploaded file names into evidence_documents
             if section_key == "deviation" and existing_files:
                 current_evidence = extracted.get("evidence_documents", "")
                 all_names = list(existing_files)
@@ -916,20 +914,20 @@ class ConversationService:
                             all_names.append(name)
                 extracted["evidence_documents"] = ", ".join(all_names)
 
-            self._update_step_data(step_id, extracted, commit=False)
+            # Persist extracted fields into step.data immediately
+            self._update_step_data(step_id, extracted)
 
         section_complete = bool(extracted and _section_is_complete(section_key, extracted))
 
+        # Determine conversation state for this section
         if section_complete:
             state = "fulfilled"
-            self._maybe_mark_step_fulfilled(step_id, just_completed_section=section_key, commit=False)
+            # Check if the entire step is now fulfilled and update step.status
+            self._maybe_mark_step_fulfilled(step_id, section_key)
         elif len(history) > 1:
             state = "collecting"
         else:
             state = "opening"
-
-        # Ensure DB has generated PKs etc. before returning
-        self.db.flush()
 
         return {
             "step_id":          step_id,
@@ -941,12 +939,6 @@ class ConversationService:
         }
 
     def reset_conversation(self, step_id: int, section_key: str) -> Dict[str, Any]:
-        """
-        Delete conversation messages for a section and restart it.
-        Commits the deletion + opening message, because this endpoint is user-facing
-        and does not need to be atomic with audit in the same way.
-        (Router still writes audit + commits, but commit is safe either way.)
-        """
         self.db.query(StepConversation).filter(
             StepConversation.report_step_id == step_id,
             StepConversation.section_key    == section_key,
@@ -964,7 +956,7 @@ class ConversationService:
         result: Dict[str, List[Dict]] = {}
         for row in rows:
             result.setdefault(row.section_key, []).append(
-                self._msg_dict(row.role, row.content, row.message_index, row.meta, row.created_at)
+                self._msg_dict(row.role, row.content, row.message_index, row.meta)
             )
         return result
 
@@ -1056,8 +1048,6 @@ class ConversationService:
         content: str,
         message_index: int,
         meta: Optional[Dict] = None,
-        *,
-        commit: bool = False,
     ) -> None:
         self.db.add(StepConversation(
             report_step_id=step_id,
@@ -1068,10 +1058,7 @@ class ConversationService:
             meta=meta,
             created_at=datetime.now(timezone.utc),
         ))
-        if commit:
-            self.db.commit()
-        else:
-            self.db.flush()
+        self.db.commit()
 
     @staticmethod
     def _msg_dict(
@@ -1102,10 +1089,10 @@ class ConversationService:
             logger.warning("Failed to parse extracted_fields JSON from AI reply")
             return None
 
-    def _update_step_data(self, step_id: int, extracted: Dict, *, commit: bool = False) -> None:
+    def _update_step_data(self, step_id: int, extracted: Dict) -> None:
         """
-        Merge extracted fields into step.data and persist.
-        When commit=False, flush only (caller commits).
+        Merge extracted fields into step.data and persist immediately.
+        This is the single source of truth for saving conversation-collected data.
         """
         from app.models.report_step import ReportStep  # avoid circular import
 
@@ -1115,15 +1102,11 @@ class ConversationService:
             return
 
         current = step.data or {}
-        merged = _merge_extracted(current, extracted)
+        merged  = _merge_extracted(current, extracted)
 
-        step.data = merged
+        step.data       = merged
         step.updated_at = datetime.now(timezone.utc)
-
-        if commit:
-            self.db.commit()
-        else:
-            self.db.flush()
+        self.db.commit()
 
         logger.info(
             "Saved extracted fields to step %d (keys: %s)",
@@ -1131,34 +1114,34 @@ class ConversationService:
             list(extracted.keys()),
         )
 
-    def _maybe_mark_step_fulfilled(self, step_id: int, just_completed_section: str, *, commit: bool = False) -> None:
+    def _maybe_mark_step_fulfilled(self, step_id: int, just_completed_section: str) -> None:
         """
         After a section completes, check whether ALL sections for this step
-        are now fulfilled. If so, mark step.status = 'fulfilled'.
-
-        When commit=False, flush only (caller commits).
+        are now fulfilled. If so (or if the step has no multi-section config,
+        e.g. D1), mark step.status = 'fulfilled'.
         """
         from app.models.report_step import ReportStep  # avoid circular import
 
         step = self.db.get(ReportStep, step_id)
         if step is None:
             return
-
         complaint = step.report.complaint
-        step_code = step.step_code
+
+        step_code    = step.step_code
         all_sections = get_all_section_keys(step_code)
 
         if not all_sections:
-            step.status = "fulfilled"
-            complaint.status = step.step_code
+            # D1 or any step with no section config: fulfilled when one section completes
+            step.status       = "fulfilled"
+            logger.info("Step %d (%s) has no multi-section config — marked fulfilled", step_id, step_code)
+            complaint.status=step.step_code
+            logger.info("Complaint %d status updated to %s", complaint.id, complaint.status)
             step.completed_at = datetime.now(timezone.utc)
-            if commit:
-                self.db.commit()
-            else:
-                self.db.flush()
+            self.db.commit()
             logger.info("Step %d (%s) marked fulfilled (no multi-section config)", step_id, step_code)
             return
 
+        # Check completion status of every section by scanning conversation history
         for section_key in all_sections:
             if section_key == just_completed_section:
                 continue
@@ -1169,15 +1152,13 @@ class ConversationService:
                 )
                 return
 
-        step.status = "fulfilled"
-        complaint.status = step.step_code
+        # All sections complete → mark fulfilled
+        step.status       = "fulfilled"
+        complaint.status=step.step_code
+        logger.info("Complaint %d status updated to %s", complaint.id, complaint.status)
+
         step.completed_at = datetime.now(timezone.utc)
-
-        if commit:
-            self.db.commit()
-        else:
-            self.db.flush()
-
+        self.db.commit()
         logger.info(
             "Step %d (%s) marked fulfilled — all sections complete",
             step_id, step_code,
@@ -1208,6 +1189,10 @@ class ConversationService:
 
     @staticmethod
     def _infer_state(section_key: str, messages: List[Dict]) -> str:
+        """
+        Infer conversation state from message history for GET requests.
+        Returns 'fulfilled', 'collecting', or 'opening'.
+        """
         for msg in reversed(messages):
             if msg["role"] == "assistant":
                 meta = msg.get("meta") or {}
