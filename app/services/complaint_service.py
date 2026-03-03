@@ -10,11 +10,43 @@ from app.models.report import Report
 from app.models.report_step import ReportStep
 from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
 # from app.services import webhook_service
+from app.services.escalation_service import _SCALE
 from app.services.utils.report_helpers import generate_report_number, get_8d_steps_definitions
 
 def generate_complaint_number():
     return "C-" + "".join(random.choices(string.digits, k=5))
 
+# ── SLA days per step code ─────────────────────────────────────────────────────
+# Matches the escalation ladder: overdue = now > due_date.
+# Adjust these to your company's actual SLA commitments.
+_STEP_SLA_DAYS: dict[str, int] = {
+    "D1":  1,
+    "D2":  3,
+    "D3":  1,    # containment is urgent — same urgency as D1
+    "D4":  7,
+    "D5":  14,
+    "D6":  30,
+    "D7":  45,
+    "D8":  60,
+}
+
+def _due_date_for_step(step_code: str, created_at: datetime) -> datetime | None:
+    """
+    Return the due_date for a step given the complaint creation timestamp.
+    Returns None for unknown step codes (safe fallback — scheduler skips them).
+    """
+    days = _STEP_SLA_DAYS.get(step_code)
+    if days is None:
+        return None
+    delta_hours = days * 24 * _SCALE
+    return created_at + timedelta(hours=delta_hours)
+
+PRIORITY_MAPPING = {
+    "CS2": "critical",
+    "CS1": "high",
+    "WR": "medium",
+    "Quality Alert": "low",
+}
 
 class ComplaintService:
     @staticmethod
@@ -34,17 +66,15 @@ class ComplaintService:
         # 1. Créer la plainte
         complaint = Complaint(**payload.model_dump())
         complaint.reference_number = generate_complaint_number()
-        
-        # Calculate due date (e.g., 30 days from creation for medium severity)
-        # if not complaint.due_date:
-        #     days_to_resolve = {
-        #         'low': 45,
-        #         'medium': 30,
-        #         'high': 14,
-        #         'critical': 7
-        #     }
-        #     days = days_to_resolve.get(complaint.severity, 30)
-        #     complaint.due_date = datetime.now(timezone.utc) + timedelta(days=days)
+        complaint.priority = PRIORITY_MAPPING.get(
+        payload.quality_issue_warranty,
+        "low"  # valeur par défaut si non reconnu
+    )
+        # Anchor all step due_dates to the moment the complaint is created
+        created_at = datetime.now(timezone.utc)
+        # Calculate due date (e.g., 30 days from creation )
+        if not complaint.due_date:
+            complaint.due_date = datetime.now(timezone.utc) + timedelta(days=30)
         
         db.add(complaint)
         db.flush()  # Pour obtenir l'ID de la plainte
@@ -64,12 +94,15 @@ class ComplaintService:
             # 3. Initialiser les 8 étapes
         steps_definitions = get_8d_steps_definitions()
         for step_def in steps_definitions:
+                step_code: str = step_def["code"]
+                due_date = _due_date_for_step(step_code, created_at)
                 step = ReportStep(
                     report_id=report.id,
-                    step_code=step_def['code'],
+                    step_code=step_code,
                     step_name=step_def['name'],
-                    status='draft',
-                    data={}
+                    status="not_started",
+                    data={},
+                    due_date=due_date
                 )
                 db.add(step)
         
