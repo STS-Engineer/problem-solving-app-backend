@@ -13,3 +13,6 @@ tiktoken
 regex
 tqdm
 python-multipart
+
+apscheduler
+pip install asyncpg

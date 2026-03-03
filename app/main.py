@@ -1,22 +1,44 @@
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
-from app.api.router import api_router
 import logging
 
-FRONTEND_URL = os.getenv("FRONTEND_URL")  
+from app.api.router import api_router
+from app.services.scheduler import start_scheduler, stop_scheduler
+  
 
-app = FastAPI(title="AVOCarbon Complaints/8D report API")
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+# ── CORS ──────────────────────────────────────────────────────────────────────
+FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://avocarbon-customer-complaint.azurewebsites.net"
+    "https://avocarbon-customer-complaint.azurewebsites.net",
 ]
-logging.basicConfig(level=logging.INFO)
-# Ajoute l'env si elle existe
 if FRONTEND_URL:
     origins.append(FRONTEND_URL)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:   # ← `app` added
+    logger.info("🚀 Starting application...")
+    start_scheduler()
+    yield
+    stop_scheduler()
+    logger.info("🛑 Application stopped.")
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="AVOCarbon Complaints/8D report API",
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,6 +49,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api/v1")
+
 
 @app.get("/health")
 def health() -> dict:
