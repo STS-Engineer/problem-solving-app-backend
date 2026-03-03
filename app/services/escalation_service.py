@@ -62,30 +62,48 @@ def _hours_overdue(step: ReportStep) -> float | None:
     return delta if delta > 0 else None
 
 
-def _level_to_send(hours: float, already_sent: int) -> int | None:
-    """
-    Returns the next escalation level to send, or None.
-    Example: 50h overdue, already_sent=0 → triggered=2, next=1 ✓
-             50h overdue, already_sent=1 → triggered=2, next=2 ✓
-             50h overdue, already_sent=2 → triggered=2, next=3 ✗ (3 > triggered)
-    """
-    triggered = max((lvl for thr, lvl in THRESHOLDS if hours >= thr), default=0)
-    if triggered == 0:
-        return None
-    next_level = already_sent + 1
-    return next_level if next_level <= triggered else None
+COO_EMAIL = "hayfa.rajhi@avocarbon.com"
+CEO_EMAIL = "hayfa.rajhi@avocarbon.com"
 
 
 def _build_recipients(level: int, complaint: Complaint) -> list[str]:
-    """Ordered, deduplicated recipient list for a given escalation level."""
-    candidates: list[str | None] = []
-    if level >= 1: candidates.append(complaint.quality_manager_email)
-    if level >= 2: candidates.append(complaint.cqt_email)
-    if level >= 3: candidates.append(complaint.plant_manager_email)
-    seen: set[str] = set()
-    return [e for e in candidates if e and not (e in seen or seen.add(e))]  # type: ignore[func-returns-value]
+    """
+    L1 → Quality Manager seulement
+    L2 → Plant Manager seulement
+    L3 → COO seulement
+    L4 → CEO seulement
+    """
+    match level:
+        case 1: return [e for e in [complaint.quality_manager_email] if e]
+        case 2: return [e for e in [complaint.plant_manager_email] if e]
+        case 3: return [COO_EMAIL]
+        case 4: return [CEO_EMAIL]
+        case _: return []
 
 
+def _build_cc(level: int, complaint: Complaint) -> list[str] | None:
+    """
+    L1 → pas de CC
+    L2 → pas de CC
+    L3 → Plant Manager + Quality Manager en CC
+    L4 → COO en CC
+    """
+    match level:
+        case 3:
+            cc = [e for e in [complaint.plant_manager_email, complaint.quality_manager_email] if e]
+            return cc if cc else None
+        case 4:
+            return [COO_EMAIL]
+        case _:
+            return None
+
+
+## Ce que ça donne concrètement pour D
+# ```
+# +24h → TO: quality_manager        CC: —
+# +48h → TO: plant_manager          CC: —
+# +72h → TO: coo@avocarbon.com      CC: plant_manager, quality_manager
+# +96h → TO: ceo@avocarbon.com      CC: coo@avocarbon.com
 # ── Main job ──────────────────────────────────────────────────────────────────
 
 async def check_and_escalate_all(db: AsyncSession) -> None:
@@ -201,7 +219,7 @@ async def _process_step(db: AsyncSession, step: ReportStep) -> bool:
         plant_manager_email=complaint.plant_manager_email,
     )
 
-    cc = [complaint.plant_manager_email] if level >= 3 and complaint.plant_manager_email else None
+    cc = _build_cc(level, complaint)
 
     await send_email(subject=subject, recipients=recipients, body_html=body_html, cc=cc)
 

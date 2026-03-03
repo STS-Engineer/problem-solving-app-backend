@@ -22,9 +22,9 @@ def generate_complaint_number():
 _STEP_SLA_DAYS: dict[str, int] = {
     "D1":  1,
     "D2":  3,
-    "D3":  1,    # containment is urgent — same urgency as D1
-    "D4":  7,
-    "D5":  14,
+    "D3":  2,   
+    "D4":  5,
+    "D5":  10,
     "D6":  30,
     "D7":  45,
     "D8":  60,
