@@ -5,13 +5,17 @@ import string
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+from app.db.session import SessionLocal
 from app.models.complaint import Complaint
 from app.models.report import Report
 from app.models.report_step import ReportStep
 from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
 # from app.services import webhook_service
+from app.services.auto_extraction import auto_fill_from_complaint
 from app.services.escalation_service import _SCALE
 from app.services.utils.report_helpers import generate_report_number, get_8d_steps_definitions
+import logging
+logger = logging.getLogger(__name__)
 
 def generate_complaint_number():
     return "C-" + "".join(random.choices(string.digits, k=5))
@@ -53,7 +57,7 @@ class ComplaintService:
     def create_complaint(
         db: Session, 
         payload: ComplaintCreate,
-    ) -> Complaint:
+    ) -> tuple[Complaint, list[int]]:        
         """
         Crée une plainte et optionnellement initialise un rapport 8D
         
@@ -63,51 +67,55 @@ class ComplaintService:
             create_report: Si True, crée automatiquement un rapport 8D
             report_title: Titre du rapport (optionnel, sinon utilise le nom de la plainte)
         """
-        # 1. Créer la plainte
+        # ── 1. Create complaint ───────────────────────────────────
         complaint = Complaint(**payload.model_dump())
         complaint.reference_number = generate_complaint_number()
-        complaint.priority = PRIORITY_MAPPING.get(
-        payload.quality_issue_warranty,
-        "low"  # valeur par défaut si non reconnu
-    )
-        # Anchor all step due_dates to the moment the complaint is created
+        complaint.priority = PRIORITY_MAPPING.get(payload.quality_issue_warranty, "low")
+
         created_at = datetime.now(timezone.utc)
-        # Calculate due date (e.g., 30 days from creation )
         if not complaint.due_date:
-            complaint.due_date = datetime.now(timezone.utc) + timedelta(days=30)
-        
+            complaint.due_date = created_at + timedelta(days=30)
+
         db.add(complaint)
-        db.flush()  # Pour obtenir l'ID de la plainte
-        
-        # 2. Optionnellement créer le rapport 8D
+        db.flush()
+
+        # ── 2. Create report ──────────────────────────────────────
         report = Report(
-                complaint_id=complaint.id,
-                report_number=generate_report_number(),
-                title=f"8D Report - {complaint.complaint_name}",
-                plant=complaint.avocarbon_plant,
-                created_by=complaint.reported_by,
-                status='draft'
-            )
+            complaint_id=complaint.id,
+            report_number=generate_report_number(),
+            title=f"8D Report - {complaint.complaint_name}",
+            plant=complaint.avocarbon_plant,
+            created_by=complaint.reported_by,
+            status="draft",
+        )
         db.add(report)
-        db.flush()  # Pour obtenir l'ID du rapport
-            
-            # 3. Initialiser les 8 étapes
+        db.flush()
+
+        # ── 3. Create 8 steps ─────────────────────────────────────
         steps_definitions = get_8d_steps_definitions()
+        step_ids: list[int] = []
+
         for step_def in steps_definitions:
-                step_code: str = step_def["code"]
-                due_date = _due_date_for_step(step_code, created_at)
-                step = ReportStep(
-                    report_id=report.id,
-                    step_code=step_code,
-                    step_name=step_def['name'],
-                    status="not_started",
-                    data={},
-                    due_date=due_date
-                )
-                db.add(step)
-        
+            step_code: str = step_def["code"]
+            due_date = _due_date_for_step(step_code, created_at)
+
+            step = ReportStep(
+                report_id=report.id,
+                step_code=step_code,
+                step_name=step_def["name"],
+                status="not_started",
+                data={},
+                due_date=due_date,
+            )
+            db.add(step)
+            db.flush()
+            step_ids.append(step.id)
+
         db.commit()
         db.refresh(complaint)
+
+        # IMPORTANT: no OpenAI call here anymore
+        return complaint, step_ids
         
         # 4. Send webhook notification (async, non-blocking)
         # webhook_service.send_webhook_background(
@@ -128,8 +136,36 @@ class ComplaintService:
         #     complaint_id=complaint.id,
         #     db=db
         # )
-        return complaint
-    
+    @staticmethod
+    def run_autofill_task(complaint_id: int, step_ids: list[int]) -> None:
+        db = SessionLocal()
+        try:
+            complaint = db.get(Complaint, complaint_id)
+            if not complaint:
+                logger.warning("autofill: complaint not found id=%s", complaint_id)
+                return
+
+            steps = [db.get(ReportStep, sid) for sid in step_ids]
+            steps = [s for s in steps if s is not None]
+            if not steps:
+                logger.warning("autofill: no steps found for complaint_id=%s", complaint_id)
+                return
+
+            extracted = auto_fill_from_complaint(db, complaint, steps)
+
+            if extracted:
+                db.commit()
+            else:
+                db.rollback()
+
+        except Exception:
+            logger.exception("autofill: failed complaint_id=%s", complaint_id)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        finally:
+            db.close()
     @staticmethod
     def get_complaint_by_id(db: Session, complaint_id: int) -> Optional[Complaint]:
         """Récupère une plainte par son ID"""
