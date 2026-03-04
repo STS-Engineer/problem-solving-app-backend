@@ -32,7 +32,7 @@ def get_current_step_by_complaint(
     
     if not current_step:
         # Si toutes les étapes sont complétées, retourner D8
-        from app.models.report import ReportStep
+        from app.models.report_step import ReportStep
         d8_step = db.query(ReportStep).filter(
             ReportStep.report_id == report.id,
             ReportStep.step_code == 'D8'
