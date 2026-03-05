@@ -5,7 +5,6 @@ import string
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from app.db.session import SessionLocal
 from app.models.complaint import Complaint
 from app.models.report import Report
 from app.models.report_step import ReportStep
@@ -14,8 +13,6 @@ from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
 from app.services.auto_extraction import auto_fill_from_complaint
 from app.services.escalation_service import _SCALE
 from app.services.utils.report_helpers import generate_report_number, get_8d_steps_definitions
-import logging
-logger = logging.getLogger(__name__)
 
 def generate_complaint_number():
     return "C-" + "".join(random.choices(string.digits, k=5))
@@ -57,7 +54,7 @@ class ComplaintService:
     def create_complaint(
         db: Session, 
         payload: ComplaintCreate,
-    ) -> tuple[Complaint, list[int]]:        
+    ) -> Complaint:
         """
         Crée une plainte et optionnellement initialise un rapport 8D
         
@@ -67,19 +64,17 @@ class ComplaintService:
             create_report: Si True, crée automatiquement un rapport 8D
             report_title: Titre du rapport (optionnel, sinon utilise le nom de la plainte)
         """
-        # ── 1. Create complaint ───────────────────────────────────
+        # ── 1. Create complaint  ───────────────────────────────────
         complaint = Complaint(**payload.model_dump())
         complaint.reference_number = generate_complaint_number()
         complaint.priority = PRIORITY_MAPPING.get(payload.quality_issue_warranty, "low")
-
         created_at = datetime.now(timezone.utc)
         if not complaint.due_date:
             complaint.due_date = created_at + timedelta(days=30)
-
         db.add(complaint)
         db.flush()
 
-        # ── 2. Create report ──────────────────────────────────────
+        # ── 2. Create report (UNCHANGED) ──────────────────────────────────────
         report = Report(
             complaint_id=complaint.id,
             report_number=generate_report_number(),
@@ -91,14 +86,14 @@ class ComplaintService:
         db.add(report)
         db.flush()
 
-        # ── 3. Create 8 steps ─────────────────────────────────────
+        # ── 3. Create 8 steps — collect the step objects now  ← SMALL CHANGE ─
+        # (original used a loop without keeping references; we keep them for auto-fill)
         steps_definitions = get_8d_steps_definitions()
-        step_ids: list[int] = []
+        created_steps = []                                        # ← ADD
 
         for step_def in steps_definitions:
             step_code: str = step_def["code"]
             due_date = _due_date_for_step(step_code, created_at)
-
             step = ReportStep(
                 report_id=report.id,
                 step_code=step_code,
@@ -108,14 +103,32 @@ class ComplaintService:
                 due_date=due_date,
             )
             db.add(step)
-            db.flush()
-            step_ids.append(step.id)
+            db.flush()                                            # ← ADD (get step.id)
+            created_steps.append(step)                           # ← ADD
 
         db.commit()
         db.refresh(complaint)
 
-        # IMPORTANT: no OpenAI call here anymore
-        return complaint, step_ids
+        # ── 4. Auto-fill step data from complaint description  ← ADD BLOCK ───
+        #
+        # Runs AFTER commit so all step IDs exist in the DB.
+        # Non-fatal: a failure here never rolls back the complaint.
+        try:
+            auto_fill_from_complaint(db, complaint, created_steps)  # ← ADD
+            db.commit()                                              # ← ADD
+        except Exception as exc:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "auto_fill failed for %s — continuing without pre-fill: %s",
+                complaint.reference_number, exc,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        # ── end ADD block ─────────────────────────────────────────────────────
+
+        return complaint
         
         # 4. Send webhook notification (async, non-blocking)
         # webhook_service.send_webhook_background(
@@ -136,36 +149,7 @@ class ComplaintService:
         #     complaint_id=complaint.id,
         #     db=db
         # )
-    @staticmethod
-    def run_autofill_task(complaint_id: int, step_ids: list[int]) -> None:
-        db = SessionLocal()
-        try:
-            complaint = db.get(Complaint, complaint_id)
-            if not complaint:
-                logger.warning("autofill: complaint not found id=%s", complaint_id)
-                return
-
-            steps = [db.get(ReportStep, sid) for sid in step_ids]
-            steps = [s for s in steps if s is not None]
-            if not steps:
-                logger.warning("autofill: no steps found for complaint_id=%s", complaint_id)
-                return
-
-            extracted = auto_fill_from_complaint(db, complaint, steps)
-
-            if extracted:
-                db.commit()
-            else:
-                db.rollback()
-
-        except Exception:
-            logger.exception("autofill: failed complaint_id=%s", complaint_id)
-            try:
-                db.rollback()
-            except Exception:
-                pass
-        finally:
-            db.close()
+    
     @staticmethod
     def get_complaint_by_id(db: Session, complaint_id: int) -> Optional[Complaint]:
         """Récupère une plainte par son ID"""

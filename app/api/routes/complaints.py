@@ -13,18 +13,17 @@ router = APIRouter()
 @router.post("", response_model=ComplaintRead, status_code=status.HTTP_201_CREATED)
 def create_complaint(
     payload: ComplaintCreate,
-    background_tasks: BackgroundTasks,
+
     db: Session = Depends(get_db),
 ):
-    complaint, step_ids = ComplaintService.create_complaint(
+    """
+    Créer une nouvelle plainte
+    
+    """
+    
+    complaint = ComplaintService.create_complaint(
         db=db,
         payload=payload,
-    )
-
-    background_tasks.add_task(
-        ComplaintService.run_autofill_task,
-        complaint_id=complaint.id,
-        step_ids=step_ids,
     )
 
     return complaint

@@ -114,7 +114,6 @@ Step 3 — FILL D2 FIELDS
   Sentence 3 — THE CONTEXT: "Issue linked to [process]; classified as 
                [priority] (quality type: [quality_issue_type]). 
                First occurrence (repetition: [repetitive_number]).
-               
   five_w_2h           : fill all 7 sub-fields from your analysis.
   standard_applicable : extract only if a standard/WI/spec is explicitly named;
                         otherwise leave "".
@@ -385,14 +384,14 @@ def auto_fill_from_complaint(
             timeout=30,
         )
         
-        # logger.info(
-        #     "system content  %s", _SYSTEM)
-        # logger.info("****************************")
-        # logger.info("user content    %s", user_msg)
-        # logger.info("****************************")
-        # raw = response.choices[0].message.content.strip()
-        # logger.info("************************************************************************")
-        # logger.info("raw LLM response: %s", raw)
+        logger.info(
+            "system content  %s", _SYSTEM)
+        logger.info("****************************")
+        logger.info("user content    %s", user_msg)
+        logger.info("****************************")
+        raw = response.choices[0].message.content.strip()
+        logger.info("************************************************************************")
+        logger.info("raw LLM response: %s", raw)
 
 
         # Strip any accidental markdown code fences
