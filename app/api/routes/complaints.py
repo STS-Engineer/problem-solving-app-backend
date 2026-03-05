@@ -37,6 +37,7 @@ def list_complaints(
     limit: int = Query(50, ge=1, le=200),
     status_filter: Optional[str] = Query(None, alias="status"),
     product_line: Optional[str] = None,
+    cqt_email: Optional[str] = Query(None, description="Filter by CQT email (partial, case-insensitive)"),
 ) -> List[ComplaintListItem]:
     """List complaints with optional filters."""
     complaints = ComplaintService.list_complaints(
@@ -45,6 +46,7 @@ def list_complaints(
         limit=limit,
         status=status_filter,
         product_line=product_line,
+        cqt_email=cqt_email,
     )
     return complaints
 
