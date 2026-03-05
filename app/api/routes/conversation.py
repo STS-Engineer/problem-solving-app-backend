@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text as sa_text
 
+from app import db
 from app.api.deps import get_db
 from app.models.file import File as FileModel
 from app.models.step_file import StepFile
@@ -227,14 +228,21 @@ def get_conversation(
 
     # Fetch complaint context so the smart opener can show pre-filled data
     kb = KnowledgeBaseRetriever(db)
-    complaint_context = kb.get_complaint_context(step_id)   # ← was missing before
+    complaint_context = kb.get_complaint_context(step_id)   
+    try:
+        step_code  = _step_code_for_id(db, step_id)
+        kb_coaching = kb.get_step_coaching_content(step_code) if step_code else ""
+    except ValueError:
+        kb_coaching = ""
 
+    twenty_rules = kb.get_twenty_rules()
     svc = ConversationService(db)
     return svc.get_or_start_conversation(
-        step_id,
-        section_key,
-        complaint_context=complaint_context or None,          # ← NEW parameter
-    )
+    step_id, section_key,
+    complaint_context=complaint_context or None,
+    kb_coaching=kb_coaching,
+    twenty_rules=twenty_rules,          # ← ADD
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 

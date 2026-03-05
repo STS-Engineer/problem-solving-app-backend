@@ -385,14 +385,14 @@ def auto_fill_from_complaint(
             timeout=30,
         )
         
-        logger.info(
-            "system content  %s", _SYSTEM)
-        logger.info("****************************")
-        logger.info("user content    %s", user_msg)
-        logger.info("****************************")
-        raw = response.choices[0].message.content.strip()
-        logger.info("************************************************************************")
-        logger.info("raw LLM response: %s", raw)
+        # logger.info(
+        #     "system content  %s", _SYSTEM)
+        # logger.info("****************************")
+        # logger.info("user content    %s", user_msg)
+        # logger.info("****************************")
+        # raw = response.choices[0].message.content.strip()
+        # logger.info("************************************************************************")
+        # logger.info("raw LLM response: %s", raw)
 
 
         # Strip any accidental markdown code fences

@@ -3,19 +3,15 @@ conversation_service.py
 ═══════════════════════
 Conversational coaching service.
 
-Key changes vs previous version:
-  1. All prompts moved to prompts.py
-  2. _build_context_block replaced by build_already_known_block from prompts.py
-     → structured [ALREADY KNOWN] block prevents the AI from re-asking
-       confirmed fields or repeating questions from conversation history
-  3. _build_smart_opening simplified — seed now references [ALREADY KNOWN]
-     directly instead of re-dumping raw data
-  4. AI system prompt structure:
-       CONV_SYSTEM_PROMPT          (behaviour + memory + format rules)
-       + build_already_known_block (complaint + confirmed data — concise)
-       + SECTION_COACHING_RULES    (section-specific validation)
-       + EXTRACTION INSTRUCTION    (when/how to emit JSON)
-       + EXTRACTION_SCHEMA         (required JSON shape)
+AI system prompt structure (in order):
+  1. CONV_SYSTEM_PROMPT          — core behaviour, memory, format rules
+  2. twenty_rules                — company floor rules (always enforced)
+  3. build_already_known_block   — complaint + confirmed prior step data
+  4. SECTION_COACHING_RULES      — section-specific field validation
+  5. kb_coaching                 — internal KB standards for this step
+  6. EXTRACTION INSTRUCTION      — when/how to emit JSON
+  7. EXTRACTION_SCHEMA           — required JSON shape
+  8. MEMBER DIRECTORY            — lookup_member tool instructions
 """
 
 from __future__ import annotations
@@ -45,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# MERGE HELPERS  (unchanged)
+# MERGE HELPERS
 # =============================================================================
 
 _FIELD_ALIASES: Dict[str, str] = {
@@ -76,26 +72,26 @@ _FUNCTION_MAP: Dict[str, str] = {
     "project manager": "project_manager", "project_manager": "project_manager", "manager": "project_manager",
 }
 
-VALID_DEPARTMENTS = {"production","maintenance","engineering","quality","logistics","supplier_quality","other"}
-VALID_FUNCTIONS   = {"operator","line_leader","supervisor","engineer","team_leader","project_manager","other"}
 
 
+# REPLACE _normalise_member with:
 def _normalise_member(raw: Dict) -> Dict:
+    # Known aliases → canonical names. Unknown values preserved as-is.
     member: Dict[str, str] = {}
     for key, value in raw.items():
         canonical_key = _FIELD_ALIASES.get(str(key).lower(), str(key).lower())
         member[canonical_key] = str(value).strip() if value else ""
 
     dept_raw = member.get("department", "").lower().strip()
-    member["department"] = _DEPARTMENT_MAP.get(dept_raw, dept_raw if dept_raw in VALID_DEPARTMENTS else "other")
+    member["department"] = _DEPARTMENT_MAP.get(dept_raw, dept_raw or "unknown")
 
     func_raw = member.get("function", "").lower().strip()
-    member["function"] = _FUNCTION_MAP.get(func_raw, func_raw if func_raw in VALID_FUNCTIONS else "other")
+    member["function"] = _FUNCTION_MAP.get(func_raw, func_raw or "unknown")
 
     return {
         "name":       member.get("name", ""),
-        "department": member.get("department", "other"),
-        "function":   member.get("function", "other"),
+        "department": member.get("department", "unknown"),
+        "function":   member.get("function", "unknown"),
     }
 
 
@@ -139,16 +135,13 @@ def _merge_extracted(current: Dict, extracted: Dict) -> Dict:
 
 
 # =============================================================================
-# SECTION COMPLETENESS  (unchanged)
+# SECTION COMPLETENESS
 # =============================================================================
 
 def _section_is_complete(section_key: str, extracted: Dict) -> bool:
     if section_key == "team_members":
         members = extracted.get("team_members", [])
-        if not isinstance(members, list) or len(members) < 2:
-            return False
-        return any(m.get("function") == "team_leader" for m in members if isinstance(m, dict))
-
+        return isinstance(members, list) and len(members) >= 2
     if section_key == "five_w_2h":
         w2h = extracted.get("five_w_2h", {})
         return isinstance(w2h, dict) and all(
@@ -326,15 +319,11 @@ def _build_smart_opening(
 ) -> str:
     """
     Build a seed passed to the AI to generate a natural opening message.
-
-    The seed references [ALREADY KNOWN] (already in the system prompt) and
-    instructs the AI on HOW to open — not what to say word-for-word.
-    This prevents the AI from ignoring pre-filled data on the opening turn.
     """
     lines = [
         f"[OPENING INSTRUCTION FOR SECTION: {section_key}]",
         "",
-        "You have just received the complaint file and all prior step data.",
+        "You have just received the complaint details and all prior step data.",
         "The [ALREADY KNOWN] block in your system prompt tells you exactly",
         "what has already been confirmed. Use it.",
         "",
@@ -349,10 +338,8 @@ def _build_smart_opening(
         "  - Do NOT ask for anything already in [ALREADY KNOWN].",
         "  - Do NOT list all the fields you need to fill.",
         "  - Do NOT say 'Let me walk you through...' or similar robotic openers.",
-        "  - Format your reply using the **What I know** / **What I need** structure.",
     ]
 
-    # Add section-specific opening hint
     _OPENING_HINTS = {
         "team_members": (
             "  - Mention which departments are typically needed for this defect type.\n"
@@ -434,6 +421,8 @@ class ConversationService:
         step_id: int,
         section_key: str,
         complaint_context: Optional[Dict] = None,
+        kb_coaching: str = "",
+        twenty_rules: str = "",
     ) -> Dict[str, Any]:
         messages = self._load_messages(step_id, section_key)
         if not messages:
@@ -445,6 +434,8 @@ class ConversationService:
                 complaint_context=complaint_context,
                 existing_files=[],
                 all_step_data=all_step_data,
+                kb_coaching=kb_coaching,
+                twenty_rules=twenty_rules,
             )
             self._persist_message(step_id, section_key, "assistant", opening, 0, commit=True)
             messages = [self._msg_dict("assistant", opening, 0)]
@@ -463,6 +454,8 @@ class ConversationService:
         user_message: str,
         complaint_context: Optional[Dict] = None,
         uploaded_file_names: Optional[List[str]] = None,
+        kb_coaching: str = "",
+        twenty_rules: str = "",
     ) -> Dict[str, Any]:
         effective_message = user_message
         if uploaded_file_names:
@@ -488,6 +481,8 @@ class ConversationService:
             complaint_context=complaint_context,
             existing_files=existing_files,
             all_step_data=all_step_data,
+            kb_coaching=kb_coaching,
+            twenty_rules=twenty_rules,
         )
 
         extracted = self._parse_extracted_fields(bot_reply)
@@ -564,53 +559,161 @@ class ConversationService:
     def _call_ai(
         self,
         section_key: str,
-        history: List[Dict],
+        history: list,
         complaint_context: Optional[Dict],
-        existing_files: List[str],
-        all_step_data: Dict[str, Any],
+        existing_files: list,
+        all_step_data: dict,
+        kb_coaching: str = "",
+        twenty_rules: str = "",
     ) -> str:
+        """
+        Build the system prompt in layer order, then run the tool-call loop.
+
+        Prompt layer order:
+          1. CONV_SYSTEM_PROMPT  — core behaviour & memory rules
+          2. twenty_rules        — floor rules, always enforced
+          3. already_known       — complaint + confirmed prior step data
+          4. coaching_rules      — section-specific field validation
+          5. kb_coaching         — internal KB standards for this step
+          6. EXTRACTION INSTRUCTION + schema
+          7. MEMBER DIRECTORY    — lookup_member tool instructions
+        """
+        from app.services.member_tool import MEMBER_LOOKUP_TOOL, execute_member_lookup
+
         schema         = EXTRACTION_SCHEMA.get(section_key, "")
         coaching_rules = SECTION_COACHING_RULES.get(section_key, "")
 
-        # Core improvement: build_already_known_block replaces the old
-        # _build_context_block. It produces a concise, structured summary
-        # of complaint + confirmed fields, explicitly labelled so the AI
-        # knows what NOT to ask again.
         already_known = build_already_known_block(
             section_key=section_key,
             all_step_data=all_step_data,
             complaint_context=complaint_context,
         )
 
-        system = (
-            CONV_SYSTEM_PROMPT
-            + "\n\n"
-            + already_known
-            + (f"\n\n{coaching_rules}" if coaching_rules else "")
-            + "\n\n════════════════════════════════════════\n"
-              "EXTRACTION INSTRUCTION\n"
-              "════════════════════════════════════════\n"
-              "Emit <extracted_fields>{...}</extracted_fields> ONLY when:\n"
-              "  1. ALL required fields are confirmed and validated.\n"
-              "  2. The user has confirmed the data is correct.\n"
-              "  3. NOT on the opening message.\n"
-              "  4. NOT while any validation rule is still failing.\n\n"
-            + f"Required JSON schema:\n{schema}"
+        # ── Layer 1: core behaviour ────────────────────────────────────────────
+        system = CONV_SYSTEM_PROMPT
+
+        # ── Layer 2: floor rules (always apply, highest company-level priority) ─
+        if twenty_rules:
+            system += (
+                "\n\n════════════════════════════════════════\n"
+                "FLOOR RULES — NON-NEGOTIABLE, APPLY TO EVERY SECTION\n"
+                "════════════════════════════════════════\n"
+                + twenty_rules
+            )
+
+        # ── Layer 3: complaint + confirmed prior step data ─────────────────────
+        system += "\n\n" + already_known
+
+        # ── Layer 4: section-specific coaching & validation rules ──────────────
+        if coaching_rules:
+            system += "\n\n" + coaching_rules
+
+        # ── Layer 5: KB content — internal standards for this step ────────────
+        if kb_coaching:
+            system += (
+                "\n\n════════════════════════════════════════\n"
+                "KNOWLEDGE BASE — VALIDATED RULES FOR THIS STEP\n"
+                "════════════════════════════════════════\n"
+                "The following content comes from the internal knowledge base.\n"
+                "Use it to validate user answers, catch deviations, and propose\n"
+                "corrections. It takes precedence over generic 8D knowledge.\n\n"
+                + kb_coaching
+            )
+
+        # ── Layer 6: extraction gate ───────────────────────────────────────────
+        system += (
+            "\n\n════════════════════════════════════════\n"
+            "EXTRACTION INSTRUCTION\n"
+            "════════════════════════════════════════\n"
+            "Emit <extracted_fields>{...}</extracted_fields> ONLY when:\n"
+            "  1. ALL required fields are confirmed and validated.\n"
+            "  2. The user has confirmed the data is correct.\n"
+            "  3. NOT on the opening message.\n"
+            "  4. NOT while any validation rule is still failing.\n\n"
+            f"Required JSON schema:\n{schema}"
         )
 
+        # ── Layer 7: member directory tool instructions ────────────────────────
+        system += (
+            "\n\n════════════════════════════════════════\n"
+            "MEMBER DIRECTORY\n"
+            "════════════════════════════════════════\n"
+            "You have access to the company member directory via the `lookup_member` tool.\n"
+            "RULES:\n"
+            "1. Call lookup_member whenever the user mentions a person's name\n"
+            "   (team member, responsible, approver, auditor, etc.).\n"
+            "2. If the user asks you to suggest someone for a role or department,\n"
+            "   call lookup_member with a role keyword (e.g. 'quality engineer',\n"
+            "   'quality manager') — do NOT refuse or ask the user to provide a name first.\n"
+            "3. If results contain exactly 1 match: use that person's full name,\n"
+            "   department, and role directly — do not ask the user to repeat them.\n"
+            "4. If results contain 2-3 matches: present them naturally and ask\n"
+            "   the user to confirm which one.\n"
+            "5. If no results: try again with just the first name or last name\n"
+            "   separately before telling the user no match was found.\n"
+            "6. NEVER invent or guess member details. Always call the tool first."
+        )
+
+        # ── Build message list ─────────────────────────────────────────────────
         openai_messages = [{"role": "system", "content": system}]
         for msg in history:
             openai_messages.append({"role": msg["role"], "content": msg["content"]})
 
+        # ── Tool-call loop (max 5 rounds) ──────────────────────────────────────
+        MAX_TOOL_ROUNDS = 5
+
         try:
-            response = self.client.chat.completions.create(
+            for _round in range(MAX_TOOL_ROUNDS):
+                response = self.client.chat.completions.create(
+                    model=settings.OPENAI_MODEL,
+                    messages=openai_messages,
+                    tools=[MEMBER_LOOKUP_TOOL],
+                    tool_choice="auto",
+                    temperature=0.3,
+                    max_completion_tokens=1400,
+                    timeout=30,
+                )
+
+                choice  = response.choices[0]
+                message = choice.message
+
+                # Plain text reply — done
+                if choice.finish_reason == "stop" or not message.tool_calls:
+                    return (message.content or "").strip()
+
+                # Tool call(s) requested — execute and feed results back
+                openai_messages.append(message)
+
+                for tool_call in message.tool_calls:
+                    if tool_call.function.name == "lookup_member":
+                        try:
+                            args  = json.loads(tool_call.function.arguments)
+                            query = args.get("query", "")
+                        except (json.JSONDecodeError, AttributeError):
+                            query = ""
+
+                        tool_result = execute_member_lookup(query, self.db)
+
+                        openai_messages.append({
+                            "role":         "tool",
+                            "tool_call_id": tool_call.id,
+                            "content":      tool_result,
+                        })
+
+            # Fallback: exceeded tool rounds
+            openai_messages.append({
+                "role":    "user",
+                "content": "[system: please provide your final answer now]",
+            })
+            final = self.client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=openai_messages,
                 temperature=0.3,
                 max_completion_tokens=1400,
                 timeout=30,
             )
-            return response.choices[0].message.content.strip()
+            return (final.choices[0].message.content or "").strip()
+
         except OpenAIError as e:
             logger.error("OpenAI conversation error: %s", e)
             raise RuntimeError(f"AI service unavailable: {e}")
