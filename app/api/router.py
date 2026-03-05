@@ -6,7 +6,7 @@ from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.step_files import router as step_files_router
 from app.api.routes.conversation import router as conversation_router
 from app.api.routes.logger_complaint import router as logger_complaint_router
-
+from app.api.routes.test_members import router as test_members_router
 api_router = APIRouter()
 
 api_router.include_router(complaints_router, prefix="/complaints", tags=["complaints"])
@@ -24,4 +24,4 @@ api_router.include_router(steps_router, prefix="/steps", tags=["steps"])
 api_router.include_router(reports_router, prefix="/reports", tags=["reports"])
 api_router.include_router(dashboard_router, prefix="/dashboard", tags=["📊 Dashboard"])  # NEW
 api_router.include_router(step_files_router,prefix="/steps", tags=["steps"])
-
+api_router.include_router(test_members_router, prefix="/test-members", tags=["test-members"])
