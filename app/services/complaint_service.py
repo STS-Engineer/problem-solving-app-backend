@@ -185,6 +185,7 @@ class ComplaintService:
         limit: int = 50,
         status: Optional[str] = None,
         product_line: Optional[str] = None,
+        cqt_email: Optional[str] = None,
     ) -> List[Complaint]:
         query = db.query(Complaint)
         
@@ -192,6 +193,11 @@ class ComplaintService:
             query = query.filter(Complaint.status == status)
         if product_line:
             query = query.filter(Complaint.product_line == product_line)
+        if cqt_email:
+            # Case-insensitive partial match so "alice@" finds "alice@acme.com"
+            query = query.filter(
+                Complaint.cqt_email.ilike(f"%{cqt_email}%")
+            )
         
         return query.order_by(Complaint.created_at.desc()).offset(skip).limit(limit).all()
 

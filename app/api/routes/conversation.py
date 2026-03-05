@@ -224,9 +224,17 @@ def get_conversation(
 ):
     _require_step(step_id, db)
     _require_section(section_key)
-    svc = ConversationService(db)
-    return svc.get_or_start_conversation(step_id, section_key)
 
+    # Fetch complaint context so the smart opener can show pre-filled data
+    kb = KnowledgeBaseRetriever(db)
+    complaint_context = kb.get_complaint_context(step_id)   # ← was missing before
+
+    svc = ConversationService(db)
+    return svc.get_or_start_conversation(
+        step_id,
+        section_key,
+        complaint_context=complaint_context or None,          # ← NEW parameter
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 
