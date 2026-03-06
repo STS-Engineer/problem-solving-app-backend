@@ -11,7 +11,7 @@ from app.models.report_step import ReportStep
 from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
 # from app.services import webhook_service
 from app.services.auto_extraction import auto_fill_from_complaint
-from app.services.escalation_service import _SCALE
+# from app.services.escalation_service import _SCALE
 from app.services.utils.report_helpers import generate_report_number, get_8d_steps_definitions
 
 def generate_complaint_number():
@@ -39,7 +39,7 @@ def _due_date_for_step(step_code: str, created_at: datetime) -> datetime | None:
     days = _STEP_SLA_DAYS.get(step_code)
     if days is None:
         return None
-    delta_hours = days * 24 * _SCALE
+    delta_hours = days * 24 
     return created_at + timedelta(hours=delta_hours)
 
 PRIORITY_MAPPING = {

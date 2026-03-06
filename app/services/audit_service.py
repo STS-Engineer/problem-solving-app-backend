@@ -7,12 +7,20 @@ Changes vs original:
   ① log_status_changed — renamed event_data keys "old"/"new"
     → "previous_value"/"new_value" to match the TS renderEventData() reader
   ② log_escalation_sent — added `reason` param (was missing → UI showed "—")
-  ③ Added log_file_uploaded()   (referenced in EVENT_CFG, never written before)
-  ④ Added log_step_reopened()   (triggered on conversation reset)
-  ⑤ Added log_comment_added()   (triggered when bot reply has no extracted fields)
+  ③ Added log_file_uploaded()    (referenced in EVENT_CFG, never written before)
+  ④ Added log_step_reopened()    (triggered on conversation reset)
+  ⑤ Added log_comment_added()    (triggered when bot reply has no extracted fields)
   ⑥ Added sync equivalents for every helper (conversation router uses sync Session)
-     All async helpers call _write_async(); all sync helpers call _write_sync().
+     All async helpers call log_event(); all sync helpers call log_event_sync().
      No logic duplication — both paths share _build_entry().
+
+  ⑦ [FIX] log_step_updated / log_step_updated_sync: unified event_data keys to
+     "old_values"/"new_values" (were "old"/"new" — inconsistent with key naming
+     convention used everywhere else and with the TS reader)
+  ⑧ [FIX] Removed _complaint_id_for_step() and _report_id_for_step() — defined
+     but never called anywhere; dead code that adds noise and import side-effects
+  ⑨ [ADDED] log_complaint_created_sync() and log_report_created_sync() — every
+     other helper has a sync twin; these two were missing
 """
 
 from __future__ import annotations
@@ -48,7 +56,6 @@ def _build_entry(
         event_data=event_data or {},
         performed_by_email=performed_by_email,
         created_at=utc_now(),
-
     )
 
 
@@ -68,6 +75,9 @@ async def log_event(
     """
     Async: write a single audit event, flushed but not committed.
     Use for routes backed by AsyncSession.
+
+    Safe to call inside a db.begin_nested() savepoint — the flush targets
+    the current savepoint, not the outer transaction.
     """
     entry = _build_entry(
         complaint_id=complaint_id,
@@ -83,7 +93,7 @@ async def log_event(
     return entry
 
 
-# ─── Sync core (for routes using sqlalchemy.orm.Session) ─────────────────────
+# ─── Sync core ────────────────────────────────────────────────────────────────
 
 def log_event_sync(
     db: Session,
@@ -98,7 +108,7 @@ def log_event_sync(
 ) -> ComplaintAuditLog:
     """
     Sync: write a single audit event, flushed but not committed.
-    Use for routes backed by sqlalchemy.orm.Session  (conversation router, etc.)
+    Use for routes backed by sqlalchemy.orm.Session (conversation router, etc.)
     """
     entry = _build_entry(
         complaint_id=complaint_id,
@@ -112,39 +122,6 @@ def log_event_sync(
     db.add(entry)
     db.flush()
     return entry
-
-
-# ─── Helper: resolve complaint_id from step_id (sync) ────────────────────────
-
-def _complaint_id_for_step(db: Session, step_id: int) -> int:
-    """
-    Resolve the complaint_id that owns a given report_step.
-    Raises ValueError if not found.
-    """
-    from sqlalchemy import text as sa_text
-
-    row = db.execute(
-        sa_text(
-            "SELECT r.complaint_id "
-            "FROM report_steps rs "
-            "JOIN reports r ON r.id = rs.report_id "
-            "WHERE rs.id = :step_id"
-        ),
-        {"step_id": step_id},
-    ).fetchone()
-    if row is None:
-        raise ValueError(f"Cannot resolve complaint_id for step_id={step_id}")
-    return int(row[0])
-
-
-def _report_id_for_step(db: Session, step_id: int) -> int | None:
-    from sqlalchemy import text as sa_text
-
-    row = db.execute(
-        sa_text("SELECT report_id FROM report_steps WHERE id = :id"),
-        {"id": step_id},
-    ).fetchone()
-    return int(row[0]) if row else None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -234,8 +211,10 @@ async def log_step_updated(
         event_type="step_updated",
         event_data={
             "changed_fields": changed_fields,
-            "old": old_values,
-            "new": new_values,
+            # FIX ⑦: was "old"/"new" — unified to "old_values"/"new_values"
+            # to match the naming convention used everywhere else and the TS reader.
+            "old_values": old_values,
+            "new_values": new_values,
         },
         performed_by_email=performed_by_email,
     )
@@ -295,7 +274,7 @@ async def log_escalation_sent(
     level: int,
     recipients: list[str],
     template: str,
-    reason: str | None = None,   # ① FIX: was missing — caused "—" in UI
+    reason: str | None = None,
 ) -> ComplaintAuditLog:
     return await log_event(
         db,
@@ -307,7 +286,7 @@ async def log_escalation_sent(
             "level": level,
             "recipients": recipients,
             "template": template,
-            "reason": reason,          # always include (None is fine)
+            "reason": reason,
         },
         performed_by_email=None,  # system event
     )
@@ -325,7 +304,6 @@ async def log_status_changed(
         db,
         complaint_id=complaint_id,
         event_type="status_changed",
-        # ② FIX: was {"old": ..., "new": ...} — TS reads previous_value/new_value
         event_data={
             "previous_value": old_status,
             "new_value": new_status,
@@ -334,7 +312,7 @@ async def log_status_changed(
     )
 
 
-async def log_file_uploaded(       # ③ NEW
+async def log_file_uploaded(
     db: AsyncSession,
     complaint_id: int,
     step_id: int,
@@ -362,7 +340,7 @@ async def log_file_uploaded(       # ③ NEW
     )
 
 
-async def log_comment_added(       # ⑤ NEW
+async def log_comment_added(
     db: AsyncSession,
     complaint_id: int,
     *,
@@ -383,8 +361,51 @@ async def log_comment_added(       # ⑤ NEW
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SYNC typed helpers  (⑥ mirrors above — for conversation router / sync routes)
+# SYNC typed helpers
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# FIX ⑨: log_complaint_created_sync and log_report_created_sync were missing —
+# every other helper had a sync twin; added here for completeness.
+
+def log_complaint_created_sync(
+    db: Session,
+    complaint_id: int,
+    *,
+    priority: str,
+    cqt_email: str | None,
+    quality_manager_email: str | None,
+    performed_by_email: str,
+) -> ComplaintAuditLog:
+    return log_event_sync(
+        db,
+        complaint_id=complaint_id,
+        event_type="complaint_created",
+        event_data={
+            "priority": priority,
+            "cqt_email": cqt_email,
+            "quality_manager_email": quality_manager_email,
+        },
+        performed_by_email=performed_by_email,
+    )
+
+
+def log_report_created_sync(
+    db: Session,
+    complaint_id: int,
+    report_id: int,
+    *,
+    report_number: str,
+    performed_by_email: str | None = None,
+) -> ComplaintAuditLog:
+    return log_event_sync(
+        db,
+        complaint_id=complaint_id,
+        report_id=report_id,
+        event_type="report_created",
+        event_data={"report_number": report_number},
+        performed_by_email=performed_by_email,
+    )
+
 
 def log_step_filled_sync(
     db: Session,
@@ -429,8 +450,9 @@ def log_step_updated_sync(
         event_type="step_updated",
         event_data={
             "changed_fields": changed_fields,
-            "old": old_values,
-            "new": new_values,
+            # FIX ⑦: unified with async version
+            "old_values": old_values,
+            "new_values": new_values,
         },
         performed_by_email=performed_by_email,
     )

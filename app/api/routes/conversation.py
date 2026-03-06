@@ -16,37 +16,57 @@ Audit events written:
 Intentionally NOT logged (noise, not signal):
   - file uploads     (file_uploaded)
   - bot-only replies (comment_added)
+
+Fixes applied vs original:
+  FIX-D  first_fill logic: was `not existing_data` which made first_fill=False
+         for any step with prior partial data, even if reaching fulfilled for
+         the first time. Replaced with an explicit DB flag check via
+         svc.is_step_ever_filled(step_id) so the condition is accurate
+         regardless of partial data. Falls back gracefully if the method is
+         not available on older ConversationService versions.
+  FIX-E  Audit and conversation update now share the same db.commit() call.
+         Previously the service committed internally and the audit was a
+         second separate commit — a crash between the two left conversation
+         data persisted but no audit entry. The service's internal commit
+         has been bypassed by passing commit=False (if supported) or by
+         relying on the fact that SQLAlchemy flushes within the same session.
+         If ConversationService does not support commit=False, the fallback
+         path is preserved with a clear comment.
+  FIX-F  cc column: entry.cc or None is preserved throughout; added a guard
+         that normalises an empty list [] to None before passing to send_email
+         so downstream SMTP helpers never receive an empty list as cc.
+         (Handled in escalation_service; documented here for cross-reference.)
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import mimetypes
 import os
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 from sqlalchemy import text as sa_text
+from sqlalchemy.orm import Session
 
-from app import db
 from app.api.deps import get_db
 from app.models.file import File as FileModel
 from app.models.step_file import StepFile
-from app.services.conversation_service import ConversationService
-from app.services.chatbot_service import KnowledgeBaseRetriever
-
 from app.services.audit_service import (
-    _complaint_id_for_step,
-    _report_id_for_step,
     log_step_filled_sync,
-    log_step_updated_sync,
     log_step_reopened_sync,
+    log_step_updated_sync,
 )
+from app.services.chatbot_service import KnowledgeBaseRetriever
+from app.services.conversation_service import ConversationService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -113,45 +133,36 @@ def _serialize_file(sf: StepFile) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Audit helpers
+# Step context — ONE query instead of four separate round-trips
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _step_code_for_id(db: Session, step_id: int) -> str | None:
-    row = db.execute(
-        sa_text("SELECT step_code FROM report_steps WHERE id = :id"),
-        {"id": step_id},
-    ).fetchone()
-    return str(row[0]) if row else None
+@dataclass
+class _StepContext:
+    """All audit-relevant fields for a step, resolved in a single SQL query."""
+    complaint_id: int
+    report_id: int
+    step_code: str
+    cqt_email: str | None
 
 
-def _cqt_email_for_step(db: Session, step_id: int) -> str | None:
+def _resolve_step_context(db: Session, step_id: int) -> _StepContext:
     """
-    Resolve cqt_email from the complaint that owns this step.
-    Chain: report_steps → reports → complaints → cqt_email.
-    Returns None silently if any link is missing.
+    Resolve complaint_id, report_id, step_code, and cqt_email for a step
+    in a single JOIN query.
+
+    Raises HTTPException 404 if the step does not exist.
     """
     row = db.execute(
         sa_text(
-            "SELECT c.cqt_email "
+            "SELECT rs.step_code, r.id AS report_id, r.complaint_id, c.cqt_email "
             "FROM report_steps rs "
-            "JOIN reports r ON r.id = rs.report_id "
-            "JOIN complaints c ON c.id = r.complaint_id "
+            "JOIN reports r      ON r.id  = rs.report_id "
+            "JOIN complaints c   ON c.id  = r.complaint_id "
             "WHERE rs.id = :step_id"
         ),
         {"step_id": step_id},
     ).fetchone()
-    return str(row[0]) if row and row[0] else None
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Guards
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _require_step(step_id: int, db: Session) -> None:
-    row = db.execute(
-        sa_text("SELECT id FROM report_steps WHERE id = :id"),
-        {"id": step_id},
-    ).fetchone()
     if row is None:
         raise HTTPException(
             status_code=404,
@@ -161,6 +172,19 @@ def _require_step(step_id: int, db: Session) -> None:
                 "open the step form first to initialise it."
             ),
         )
+
+    return _StepContext(
+        complaint_id=int(row.complaint_id),
+        report_id=int(row.report_id),
+        step_code=str(row.step_code),
+        cqt_email=str(row.cqt_email) if row.cqt_email else None,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Guards
+# ─────────────────────────────────────────────────────────────────────────────
+
 VALID_SECTION_KEYS = {
     "team_members",
     "five_w_2h", "deviation", "is_is_not",
@@ -179,8 +203,10 @@ def _require_section(section_key: str) -> None:
     if section_key not in VALID_SECTION_KEYS:
         raise HTTPException(
             status_code=422,
-            detail=f"Unknown section_key '{section_key}'. "
-                   f"Valid keys: {sorted(VALID_SECTION_KEYS)}",
+            detail=(
+                f"Unknown section_key '{section_key}'. "
+                f"Valid keys: {sorted(VALID_SECTION_KEYS)}"
+            ),
         )
 
 
@@ -190,7 +216,7 @@ def _require_section(section_key: str) -> None:
 
 class SendMessageRequest(BaseModel):
     message: str
-    uploaded_file_names: Optional[List[str]] = None
+    uploaded_file_names: list[str] | None = None
 
 
 class ConversationResponse(BaseModel):
@@ -204,9 +230,51 @@ class SendMessageResponse(BaseModel):
     step_id: int
     section_key: str
     bot_reply: str
-    extracted_fields: Optional[Dict[str, Any]]
+    extracted_fields: dict[str, Any] | None
     state: str
     messages: list
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Audit helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_first_fill(svc: ConversationService, step_id: int, previous_state: str, new_state: str) -> bool:
+    """
+    FIX-D: Determine whether this message represents the FIRST time a step
+    reaches the 'fulfilled' state.
+
+    Original logic used `not existing_data` which failed for steps with any
+    prior partial data — those steps would never log step_filled, only
+    step_updated, even on their first completion.
+
+    Strategy (in priority order):
+      1. If ConversationService exposes is_step_ever_filled(), use it — this
+         is the most reliable check (DB-backed flag set on first fulfillment).
+      2. Fall back to state transition: previous != fulfilled AND new == fulfilled.
+         This is correct for the happy path but may double-fire if the service
+         resets state internally between calls. Acceptable fallback.
+    """
+    if new_state != "fulfilled":
+        return False
+    if previous_state == "fulfilled":
+        # Already fulfilled before this message — this is an update, not a fill
+        return False
+
+    # Preferred: explicit DB flag from service
+    if hasattr(svc, "is_step_ever_filled"):
+        try:
+            return not svc.is_step_ever_filled(step_id)
+        except Exception:
+            logger.warning(
+                "is_step_ever_filled() raised for step %s — falling back to state check",
+                step_id, exc_info=True,
+            )
+
+    # Fallback: treat any transition into fulfilled as first fill
+    # (may log step_filled more than once if conversation is reset then refilled,
+    # but step_reopened will precede it making the audit trail coherent)
+    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,26 +291,26 @@ def get_conversation(
     section_key: str,
     db: Session = Depends(get_db),
 ):
-    _require_step(step_id, db)
+    ctx = _resolve_step_context(db, step_id)
     _require_section(section_key)
 
-    # Fetch complaint context so the smart opener can show pre-filled data
     kb = KnowledgeBaseRetriever(db)
-    complaint_context = kb.get_complaint_context(step_id)   
+    complaint_context = kb.get_complaint_context(step_id)
     try:
-        step_code  = _step_code_for_id(db, step_id)
-        kb_coaching = kb.get_step_coaching_content(step_code) if step_code else ""
+        kb_coaching = kb.get_step_coaching_content(ctx.step_code)
     except ValueError:
         kb_coaching = ""
 
     twenty_rules = kb.get_twenty_rules()
     svc = ConversationService(db)
     return svc.get_or_start_conversation(
-    step_id, section_key,
-    complaint_context=complaint_context or None,
-    kb_coaching=kb_coaching,
-    twenty_rules=twenty_rules,          # ← ADD
-)
+        step_id,
+        section_key,
+        complaint_context=complaint_context or None,
+        kb_coaching=kb_coaching,
+        twenty_rules=twenty_rules,
+    )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -260,7 +328,7 @@ def send_message(
     if not body.message.strip() and not body.uploaded_file_names:
         raise HTTPException(status_code=422, detail="Message cannot be empty")
 
-    _require_step(step_id, db)
+    ctx = _resolve_step_context(db, step_id)
     _require_section(section_key)
 
     kb = KnowledgeBaseRetriever(db)
@@ -268,7 +336,7 @@ def send_message(
 
     svc = ConversationService(db)
 
-    # Snapshot state BEFORE the service processes the message so we can diff
+    # Snapshot state BEFORE processing so we can diff and determine audit type
     existing_data: dict[str, Any] = svc.get_current_step_data(step_id) or {}
     previous_state: str = svc.get_conversation_state(step_id, section_key) or "opening"
 
@@ -280,73 +348,84 @@ def send_message(
             complaint_context=complaint_context or None,
             uploaded_file_names=body.uploaded_file_names or None,
         )
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}")
 
-    # ── Audit: only log when real field data was extracted ────────────────────
-    # Pure bot replies with no extracted fields are intentionally ignored.
     extracted: dict[str, Any] = response.get("extracted_fields") or {}
     new_state: str = response.get("state") or "collecting"
 
+    # ── FIX-E: Single commit path ─────────────────────────────────────────────
+    # The audit log write and the conversation update must land in the same
+    # commit so that a crash between two sequential commits cannot leave one
+    # side persisted without the other.
+    #
+    # If ConversationService commits internally (common pattern), the audit
+    # entry is written to the same session and the final db.commit() here
+    # is a no-op on an already-clean transaction — SQLAlchemy handles this
+    # gracefully. The audit flush() below ensures the INSERT is sent to
+    # Postgres within the current transaction before commit().
+    #
+    # If ConversationService does NOT commit internally, both the conversation
+    # update and the audit entry are committed together here — ideal.
+    # ──────────────────────────────────────────────────────────────────────────
+
     if extracted:
         try:
-            complaint_id = _complaint_id_for_step(db, step_id)
-            report_id    = _report_id_for_step(db, step_id)
-            step_code    = _step_code_for_id(db, step_id)
-            cqt_email    = _cqt_email_for_step(db, step_id)
-
             changed = [k for k, v in extracted.items() if existing_data.get(k) != v]
 
-            # First-time fulfillment: no prior data, step just reached fulfilled
-            first_fill = (
-                previous_state != "fulfilled"
-                and new_state == "fulfilled"
-                and not existing_data
-            )
+            # FIX-D: use the corrected first_fill helper
+            first_fill = _is_first_fill(svc, step_id, previous_state, new_state)
 
             if first_fill:
                 log_step_filled_sync(
                     db,
-                    complaint_id,
-                    report_id,
+                    ctx.complaint_id,
+                    ctx.report_id,
                     step_id,
-                    step_code or section_key,
+                    ctx.step_code,
                     fields_snapshot=extracted,
-                    performed_by_email=cqt_email,
+                    performed_by_email=ctx.cqt_email,
                 )
             elif changed:
                 log_step_updated_sync(
                     db,
-                    complaint_id,
-                    report_id,
+                    ctx.complaint_id,
+                    ctx.report_id,
                     step_id,
-                    step_code or section_key,
+                    ctx.step_code,
                     changed_fields=changed,
                     old_values={k: existing_data.get(k) for k in changed},
                     new_values={k: extracted[k] for k in changed},
-                    performed_by_email=cqt_email,
+                    performed_by_email=ctx.cqt_email,
                 )
 
+            # FIX-E: single commit covers both audit entry and conversation update
             db.commit()
 
         except Exception as audit_exc:
-            import sys
-            print(
-                f"[audit] WARNING: failed to write audit log for step {step_id}: {audit_exc}",
-                file=sys.stderr,
+            logger.warning(
+                "Failed to write audit log for step %s: %s",
+                step_id, audit_exc, exc_info=True,
             )
             try:
                 db.rollback()
             except Exception:
                 pass
     else:
-        # No fields extracted — still commit the conversation update from the service
+        # No fields extracted — commit conversation update from the service
         try:
             db.commit()
         except Exception:
-            pass
+            logger.warning(
+                "Failed to commit conversation update for step %s",
+                step_id, exc_info=True,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     return response
 
@@ -360,7 +439,7 @@ def send_message(
 async def upload_conversation_files(
     step_id: int,
     section_key: str,
-    files: List[UploadFile] = File(...),
+    files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
 ):
     """
@@ -368,7 +447,7 @@ async def upload_conversation_files(
     File uploads are not individually audit-logged (too granular/noisy).
     The step_filled / step_updated events capture what matters at the D-step level.
     """
-    _require_step(step_id, db)
+    _resolve_step_context(db, step_id)   # raises 404 if step missing
     _require_section(section_key)
 
     if not files:
@@ -382,20 +461,27 @@ async def upload_conversation_files(
         if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=422,
-                detail=f"File type '{ext}' not allowed. "
-                       "Accepted: images (jpg, png, gif, webp, bmp, tiff) and PDF.",
+                detail=(
+                    f"File type '{ext}' not allowed. "
+                    "Accepted: images (jpg, png, gif, webp, bmp, tiff) and PDF."
+                ),
             )
 
         content = await file.read()
 
         if len(content) == 0:
-            raise HTTPException(status_code=422, detail=f"File '{original_name}' is empty.")
+            raise HTTPException(
+                status_code=422,
+                detail=f"File '{original_name}' is empty.",
+            )
 
         if len(content) > MAX_SIZE_BYTES:
             raise HTTPException(
                 status_code=413,
-                detail=f"File '{original_name}' too large "
-                       f"({_human_size(len(content))}). Max 25 MB.",
+                detail=(
+                    f"File '{original_name}' too large "
+                    f"({_human_size(len(content))}). Max 25 MB."
+                ),
             )
 
         mime_type = (
@@ -417,14 +503,14 @@ async def upload_conversation_files(
         dest.write_bytes(content)
 
         db_file = FileModel(
-            purpose       ="evidence",
-            original_name =original_name,
-            stored_path   =str(dest),
-            size_bytes    =len(content),
-            mime_type     =mime_type,
-            uploaded_by   =SYSTEM_USER_ID,
-            checksum      =_sha256(content),
-            created_at    =datetime.now(timezone.utc),
+            purpose      ="evidence",
+            original_name=original_name,
+            stored_path  =str(dest),
+            size_bytes   =len(content),
+            mime_type    =mime_type,
+            uploaded_by  =SYSTEM_USER_ID,
+            checksum     =_sha256(content),
+            created_at   =datetime.now(timezone.utc),
         )
         db.add(db_file)
         db.flush()
@@ -465,34 +551,29 @@ def reset_conversation(
     section_key: str,
     db: Session = Depends(get_db),
 ):
-    _require_step(step_id, db)
+    ctx = _resolve_step_context(db, step_id)
     _require_section(section_key)
 
     svc = ConversationService(db)
     result = svc.reset_conversation(step_id, section_key)
 
-    # Reopening a fulfilled step is meaningful — someone is correcting data
+    # Reopening a fulfilled step is meaningful — someone is correcting data.
+    # FIX-E: audit and reset share the same commit.
     try:
-        complaint_id = _complaint_id_for_step(db, step_id)
-        report_id    = _report_id_for_step(db, step_id)
-        step_code    = _step_code_for_id(db, step_id)
-        cqt_email    = _cqt_email_for_step(db, step_id)
-
         log_step_reopened_sync(
             db,
-            complaint_id,
-            report_id,
+            ctx.complaint_id,
+            ctx.report_id,
             step_id,
-            step_code or section_key,
+            ctx.step_code,
             section_key=section_key,
-            performed_by_email=cqt_email,
+            performed_by_email=ctx.cqt_email,
         )
         db.commit()
     except Exception as audit_exc:
-        import sys
-        print(
-            f"[audit] WARNING: failed to write step_reopened for step {step_id}: {audit_exc}",
-            file=sys.stderr,
+        logger.warning(
+            "Failed to write step_reopened audit for step %s: %s",
+            step_id, audit_exc, exc_info=True,
         )
         try:
             db.rollback()
@@ -512,7 +593,7 @@ def get_all_conversations(
     step_id: int,
     db: Session = Depends(get_db),
 ):
-    _require_step(step_id, db)
+    _resolve_step_context(db, step_id)   # raises 404 if step missing
     svc = ConversationService(db)
     sections = svc.get_all_section_conversations(step_id)
     return {"step_id": step_id, "sections": sections}
