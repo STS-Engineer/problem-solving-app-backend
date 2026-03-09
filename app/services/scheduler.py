@@ -19,7 +19,7 @@ load_dotenv()
 TEST_MODE = os.getenv("TEST_ESCALATION", "false").lower() == "true"
 DEV_MODE  = os.getenv("DEV_MODE", "false").lower() == "true"
 
-CHECK_INTERVAL_MINUTES = 2 if TEST_MODE else 30
+CHECK_INTERVAL_MINUTES = 2 if TEST_MODE else 5
 RETRY_INTERVAL_MINUTES = 10
 
 LOCK_ID_ESCALATION = 8_001
