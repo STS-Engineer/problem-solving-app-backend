@@ -1,5 +1,18 @@
 """
 app/services/scheduler.py
+
+Uses BackgroundScheduler with FULLY SYNCHRONOUS job functions.
+No async bridging (run_coroutine_threadsafe) — that pattern is unreliable on
+Azure App Service because the uvicorn event loop lifecycle is not guaranteed
+to be in the expected state when accessed from a background thread.
+
+Pattern (matches the working CAR reminder app):
+  - BackgroundScheduler fires jobs in its own thread pool
+  - Jobs use sync SessionLocal (not AsyncSessionLocal)
+  - SMTP is called directly (smtplib is already synchronous)
+  - Advisory locks use psycopg2-style raw SQL via sync session
+
+This is simpler, more portable, and proven to work on Azure.
 """
 from __future__ import annotations
 
@@ -9,6 +22,8 @@ import os
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from dotenv import load_dotenv
+
+from sqlalchemy import text
 
 from app.db.session import SessionLocal
 from app.services.escalation_service import check_and_escalate_all, retry_failed_emails
@@ -32,7 +47,7 @@ _scheduler: BackgroundScheduler | None = None
 
 def _try_acquire_lock(db, lock_id: int) -> bool:
     result = db.execute(
-        "SELECT pg_try_advisory_lock(:lock_id)",
+        text("SELECT pg_try_advisory_lock(:lock_id)"),
         {"lock_id": lock_id}
     )
     return result.scalar()
@@ -40,7 +55,7 @@ def _try_acquire_lock(db, lock_id: int) -> bool:
 
 def _release_lock(db, lock_id: int) -> None:
     db.execute(
-        "SELECT pg_advisory_unlock(:lock_id)",
+        text("SELECT pg_advisory_unlock(:lock_id)"),
         {"lock_id": lock_id}
     )
     db.commit()
