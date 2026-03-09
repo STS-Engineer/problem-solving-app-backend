@@ -33,7 +33,12 @@ class ReportStep(Base):
     is_overdue       = Column(Boolean, nullable=False, server_default="false",
                               comment="True once the due_date has passed without completion")
     escalation_count = Column(Integer, nullable=False, server_default="0",
-                              comment="Number of escalation emails sent (0–4)")
+                              comment=(
+                                  "Highest escalation level SUCCESSFULLY DELIVERED (0–4). "
+                                  "Only incremented on confirmed send — never speculatively. "
+                                  "Used by _level_to_send() to determine the next level. "
+                                  "L1=quality_manager, L2=plant_manager, L3=COO, L4=CEO."
+                              ))
     cost             = Column(Integer, nullable=True,
                               comment="Cost attributed to this step")
     # Relationships
