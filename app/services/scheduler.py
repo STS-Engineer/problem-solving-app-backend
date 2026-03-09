@@ -1,12 +1,23 @@
 """
 app/services/scheduler.py
+
+Uses BackgroundScheduler (thread-based) instead of AsyncIOScheduler because
+Azure App Service's process model interferes with AsyncIOScheduler's event loop
+attachment, causing jobs to silently not execute despite the scheduler reporting
+as healthy.
+
+Bridge pattern: BackgroundScheduler fires jobs in threads. Each thread uses
+asyncio.run_coroutine_threadsafe() to schedule the async job onto the main
+FastAPI event loop and blocks until it completes. This reuses the existing
+async engine / connection pool instead of creating a new one per job.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import text
 
@@ -20,7 +31,7 @@ load_dotenv()
 TEST_MODE = os.getenv("TEST_ESCALATION", "false").lower() == "true"
 DEV_MODE  = os.getenv("DEV_MODE", "false").lower() == "true"
 
-CHECK_INTERVAL_MINUTES = 2 if TEST_MODE else 30
+CHECK_INTERVAL_MINUTES = 2 if TEST_MODE else 5
 RETRY_INTERVAL_MINUTES = 10
 
 ESCALATION_MISFIRE_GRACE_S = 300   # 5 min — escalation is idempotent
@@ -29,20 +40,23 @@ EMAIL_RETRY_MISFIRE_GRACE_S = 120  # 2 min — email retry is time-sensitive
 LOCK_ID_ESCALATION = 8_001
 LOCK_ID_EMAIL_RETRY = 8_002
 
-_scheduler: AsyncIOScheduler | None = None
+_scheduler: BackgroundScheduler | None = None
+_main_loop: asyncio.AbstractEventLoop | None = None
 
+
+# ── Core async job logic ──────────────────────────────────────────────────────
 
 async def _run_with_lock(lock_id: int, job_fn, job_name: str) -> None:
     """
     Acquire a Postgres advisory lock, run job_fn(db), then release the lock.
     Only one instance across all deployed replicas will execute the job per interval.
 
-    In DEV_MODE the advisory lock is skipped entirely — the reloader spawns two
-    processes locally which causes the second to always see the lock as held.
+    In DEV_MODE the advisory lock is skipped — the reloader spawns two processes
+    locally which causes the second to always see the lock as held.
     """
     async with AsyncSessionLocal() as db:
 
-        # ── Dev mode: skip advisory lock ──────────────────────────────────────
+        # ── Dev mode: no advisory lock ────────────────────────────────────────
         if DEV_MODE:
             try:
                 await job_fn(db)
@@ -89,12 +103,12 @@ async def _run_with_lock(lock_id: int, job_fn, job_name: str) -> None:
         # 3. Release
         try:
             if job_failed:
-                await db.rollback()  # clear aborted transaction before unlock
+                await db.rollback()
             await db.execute(
                 text("SELECT pg_advisory_unlock(:lock_id)"),
                 {"lock_id": lock_id},
             )
-            await db.commit()  # flush the unlock to Postgres
+            await db.commit()
         except Exception:
             logger.exception(
                 "%s: failed to release advisory lock %d — "
@@ -103,17 +117,43 @@ async def _run_with_lock(lock_id: int, job_fn, job_name: str) -> None:
             )
 
 
-async def _run_escalation_check() -> None:
-    await _run_with_lock(LOCK_ID_ESCALATION, check_and_escalate_all, "Escalation check")
+# ── Thread → event loop bridge ────────────────────────────────────────────────
+
+def _dispatch(coro) -> None:
+    """
+    Submit a coroutine to the main FastAPI event loop from a background thread
+    and block until it completes. This reuses the existing async engine and
+    connection pool rather than creating a new one per job invocation.
+    """
+    if _main_loop is None or _main_loop.is_closed():
+        logger.error("Main event loop is not available — job skipped")
+        return
+    future = asyncio.run_coroutine_threadsafe(coro, _main_loop)
+    try:
+        future.result()  # block the scheduler thread until the coroutine finishes
+    except Exception:
+        logger.exception("Job raised an exception on the main event loop")
 
 
-async def _run_email_retry() -> None:
-    await _run_with_lock(LOCK_ID_EMAIL_RETRY, retry_failed_emails, "Email retry")
+# ── Job wrappers (sync — called by BackgroundScheduler threads) ───────────────
 
+def _run_escalation_check() -> None:
+    _dispatch(_run_with_lock(LOCK_ID_ESCALATION, check_and_escalate_all, "Escalation check"))
+
+
+def _run_email_retry() -> None:
+    _dispatch(_run_with_lock(LOCK_ID_EMAIL_RETRY, retry_failed_emails, "Email retry"))
+
+
+# ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 def start_scheduler() -> None:
-    global _scheduler
-    _scheduler = AsyncIOScheduler(timezone="UTC")
+    global _scheduler, _main_loop
+
+    # Capture the FastAPI event loop at startup — must be called from async context
+    _main_loop = asyncio.get_event_loop()
+
+    _scheduler = BackgroundScheduler(timezone="UTC")
 
     _scheduler.add_job(
         _run_escalation_check,
@@ -146,6 +186,7 @@ def start_scheduler() -> None:
 def stop_scheduler() -> None:
     global _scheduler
     if _scheduler and _scheduler.running:
+        # wait=False: jobs dispatch onto the main loop which is already shutting down
         _scheduler.shutdown(wait=False)
         logger.info("Scheduler stopped")
 
