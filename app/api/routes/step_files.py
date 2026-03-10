@@ -192,14 +192,17 @@ async def upload_file(
 
     # Save to disk
     stored_name = f"{uuid.uuid4().hex}{ext}"
-    dest = _upload_dir(request) / stored_name
+    upload_base = Path(request.app.state.uploads_root) / "8d"
+    upload_base.mkdir(parents=True, exist_ok=True)
+
+    dest = upload_base / stored_name
     dest.write_bytes(content)
 
     # Insert file record
     db_file = FileModel(
         purpose       ="evidence",
         original_name =original_name,
-        stored_path   =str(dest),
+        stored_path   =stored_name,
         size_bytes    =len(content),
         mime_type     =mime_type,
         uploaded_by   =SYSTEM_USER_ID,

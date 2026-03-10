@@ -91,15 +91,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("AVOCarbon API stopped.")
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-UPLOADS_ROOT = Path(str(BASE_DIR / "uploads"))
+HOME_DIR = Path(os.getenv("HOME", "."))
+UPLOADS_ROOT = HOME_DIR / "site" / "uploads"
 UPLOADS_ROOT.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="AVOCarbon Complaints / 8D Report API", lifespan=lifespan)
 
 app.state.uploads_root = UPLOADS_ROOT
 
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_ROOT)), name="uploads")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
