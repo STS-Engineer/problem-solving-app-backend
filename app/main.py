@@ -21,18 +21,33 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 def _configure_logging() -> None:
+    # 1. Define the format
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(fmt)
 
-    for name in (
-        "app",         
-        "apscheduler",
-    ):
+    # 2. Set specific levels for your important loggers
+    # We want to see EVERYTHING from our app and the scheduler
+    for name in ("app", "apscheduler"):
         log = logging.getLogger(name)
         log.setLevel(logging.INFO)
         log.propagate = True
 
+    # 3. SILENCE THE NOISE
+    # These are the ones currently flooding your Azure Log Stream
+    noise_loggers = [
+        "azure",
+        "azure.core.pipeline.policies.http_logging_policy",
+        "azure.monitor.opentelemetry",
+        "opentelemetry",
+        "httpx",  # Silences the OpenAI/External API request logs
+    ]
+    for name in noise_loggers:
+        log = logging.getLogger(name)
+        log.setLevel(logging.WARNING) # Only show errors/warnings
+        log.propagate = True
+
+    # 4. Configure Root logger
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     root.handlers.clear()
@@ -77,10 +92,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-UPLOADS_ROOT = Path(os.getenv("UPLOAD_DIR", BASE_DIR / "uploads"))
+UPLOADS_ROOT = Path(str(BASE_DIR / "uploads"))
 UPLOADS_ROOT.mkdir(parents=True, exist_ok=True)
-
 app = FastAPI(title="AVOCarbon Complaints / 8D Report API", lifespan=lifespan)
+
 app.state.uploads_root = UPLOADS_ROOT
 
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_ROOT)), name="uploads")
