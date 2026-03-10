@@ -1,26 +1,24 @@
-# app/api/routes/step_files.py
 """
+app/api/routes/step_files.py
+
 Evidence file upload / list / delete / serve for 8D report steps.
 
-Uses your existing two-table schema:
-  files      — stores the actual file record (path, size, mime, checksum)
-  step_files — join table linking a file to a step
-
-Auth: uploaded_by is nullable=False in the DB.
-Until real auth exists we use a SYSTEM_USER_ID placeholder.
-
-Run this once to create the system user row (adjust to match your users table):
-    INSERT INTO users (id, email, name)
-    VALUES (1, 'system@internal', 'System')
-    ON CONFLICT (id) DO NOTHING;
-
-Then set env var:  SYSTEM_USER_ID=1  (default 1)
-
 Endpoints (all mounted under /api/v1/steps):
-  POST   /{step_id}/files                        – upload one file
-  GET    /{step_id}/files                        – list files for step
-  DELETE /{step_id}/files/{step_file_id}         – detach + delete file
+  POST   /{step_id}/files                         – upload one file (optionally scoped to an action)
+  GET    /{step_id}/files                         – list all files for a step
+  GET    /{step_id}/files?action_type=X&action_index=Y – list files for a specific action
+  DELETE /{step_id}/files/{step_file_id}          – detach + delete file
   GET    /{step_id}/files/{step_file_id}/download – serve file content
+
+Action scoping (D6 per-action evidence)
+----------------------------------------
+Pass action_type and action_index as query params on POST to scope a file
+to a specific corrective action row:
+
+  POST /api/v1/steps/42/files?action_type=occurrence&action_index=0
+  POST /api/v1/steps/42/files?action_type=detection&action_index=2
+
+Files uploaded without these params are "step-level" — existing behaviour.
 """
 
 import hashlib
@@ -29,8 +27,9 @@ import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -41,16 +40,13 @@ from app.models.report_step import ReportStep
 
 router = APIRouter()
 
-# Placeholder user ID until auth is wired up.
-# Set SYSTEM_USER_ID env var to match the id of a real row in your users table.
-SYSTEM_USER_ID: int = int(os.environ.get("SYSTEM_USER_ID", "1"))
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "./uploads/evidence"))
-MAX_SIZE_BYTES = 25 * 1024 * 1024   # 25 MB
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/uploads/8d"))
+MAX_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
+SYSTEM_USER_ID: int = int(os.environ.get("SYSTEM_USER_ID", "1"))
 
-# Only images + PDFs as requested
 ALLOWED_MIME_TYPES = {
     "image/jpeg", "image/png", "image/gif",
     "image/webp", "image/bmp", "image/tiff",
@@ -62,12 +58,17 @@ ALLOWED_EXTENSIONS = {
     ".pdf",
 }
 
+ActionType = Literal["occurrence", "detection"]
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _upload_dir() -> Path:
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    return UPLOAD_DIR
+from pathlib import Path
+
+def _upload_dir(request: Request) -> Path:
+    upload_dir = Path(request.app.state.uploads_root) / "8d"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    return upload_dir
 
 
 def _sha256(data: bytes) -> str:
@@ -90,13 +91,15 @@ def _file_icon(mime_type: str) -> str:
     return "📎"
 
 
-def _serialize(sf: StepFile) -> dict:
+def _serialize(sf: StepFile, request: Request) -> dict:
     f = sf.file
+    base_url = str(request.base_url).rstrip("/")
+    download_url = f"{base_url}/api/v1/steps/{sf.report_step_id}/files/{sf.id}/download"
     return {
-        "id":           sf.id,           # step_files.id (used for delete)
-        "file_id":      f.id,            # files.id
+        "id":           sf.id,
+        "file_id":      f.id,
         "filename":     f.original_name,
-        "stored_path":  f.stored_path,
+        "url":          download_url,
         "mime_type":    f.mime_type or "application/octet-stream",
         "size_bytes":   f.size_bytes,
         "size_label":   _human_size(f.size_bytes),
@@ -104,6 +107,9 @@ def _serialize(sf: StepFile) -> dict:
         "is_image":     (f.mime_type or "").startswith("image/"),
         "uploaded_at":  f.created_at.isoformat() if f.created_at else None,
         "checksum":     f.checksum,
+        # Action scope — null for step-level files
+        "action_type":  sf.action_type,
+        "action_index": sf.action_index,
     }
 
 
@@ -119,26 +125,46 @@ def _get_step_or_404(step_id: int, db: Session) -> ReportStep:
 @router.post("/{step_id}/files")
 async def upload_file(
     step_id: int,
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    # ── Action scope (optional) ──────────────────────────────────────────────
+    # Pass these to link the file to a specific D6 corrective action.
+    # Omit both for step-level files (D1-D5, D7-D8, or step-wide D6 files).
+    action_type: ActionType | None = Query(
+        default=None,
+        description="'occurrence' or 'detection' — required when action_index is set",
+    ),
+    action_index: int | None = Query(
+        default=None,
+        ge=0,
+        description="0-based index of the corrective action in the D6 action array",
+    ),
 ):
     """
-    Upload a single evidence file (image or PDF) and attach it to the step.
-    Creates one row in `files` and one row in `step_files`.
+    Upload a single evidence file and attach it to the step.
+
+    For D6 per-action evidence, also pass ?action_type=occurrence&action_index=0
+    (or detection / any valid index). Files without these params are step-level.
     """
     _get_step_or_404(step_id, db)
+
+    # Validate that action_type and action_index are either both set or both absent
+    if (action_type is None) != (action_index is None):
+        raise HTTPException(
+            status_code=422,
+            detail="action_type and action_index must be provided together or not at all.",
+        )
 
     original_name = file.filename or "unnamed"
     ext = Path(original_name).suffix.lower()
 
-    # ── Validate extension ─────────────────────────────────────────────────
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=422,
             detail=f"File type '{ext}' not allowed. Accepted: images (jpg, png, gif, webp, bmp, tiff) and PDF.",
         )
 
-    # ── Read content ───────────────────────────────────────────────────────
     content = await file.read()
 
     if len(content) == 0:
@@ -150,13 +176,11 @@ async def upload_file(
             detail=f"File too large ({_human_size(len(content))}). Max 25 MB.",
         )
 
-    # ── Detect MIME ────────────────────────────────────────────────────────
     mime_type = (
         file.content_type
         or mimetypes.guess_type(original_name)[0]
         or "application/octet-stream"
     )
-    # Normalise: some browsers send image/jpg instead of image/jpeg
     if mime_type == "image/jpg":
         mime_type = "image/jpeg"
 
@@ -166,57 +190,78 @@ async def upload_file(
             detail=f"MIME type '{mime_type}' is not allowed.",
         )
 
-    # ── Save to disk ───────────────────────────────────────────────────────
+    # Save to disk
     stored_name = f"{uuid.uuid4().hex}{ext}"
-    dest = _upload_dir() / stored_name
+    dest = _upload_dir(request) / stored_name
     dest.write_bytes(content)
 
-    # ── Insert into `files` table ──────────────────────────────────────────
-    # uploaded_by is nullable=False in your schema.
-    # SYSTEM_USER_ID is a placeholder until real auth is wired up.
-    # Replace with: current_user.id  once you have a logged-in user.
+    # Insert file record
     db_file = FileModel(
-        purpose       = "evidence",
-        original_name = original_name,
-        stored_path   = str(dest),
-        size_bytes    = len(content),
-        mime_type     = mime_type,
-        uploaded_by   = SYSTEM_USER_ID,   # ← swap for current_user.id when auth ready
-        checksum      = _sha256(content),
-        created_at    = datetime.now(timezone.utc),
+        purpose       ="evidence",
+        original_name =original_name,
+        stored_path   =str(dest),
+        size_bytes    =len(content),
+        mime_type     =mime_type,
+        uploaded_by   =SYSTEM_USER_ID,
+        checksum      =_sha256(content),
+        created_at    =datetime.now(timezone.utc),
     )
     db.add(db_file)
-    db.flush()   # get db_file.id before inserting step_files row
+    db.flush()
 
-    # ── Insert into `step_files` join table ────────────────────────────────
+    # Insert step_file join row (with optional action scope)
     step_file = StepFile(
-        report_step_id = step_id,
-        file_id        = db_file.id,
-        created_at     = datetime.now(timezone.utc),
+        report_step_id=step_id,
+        file_id       =db_file.id,
+        action_type   =action_type,
+        action_index  =action_index,
+        created_at    =datetime.now(timezone.utc),
     )
     db.add(step_file)
     db.commit()
     db.refresh(step_file)
 
-    return _serialize(step_file)
+    return _serialize(step_file, request)
 
 
 @router.get("/{step_id}/files")
 def list_files(
     step_id: int,
+    request: Request,
     db: Session = Depends(get_db),
+    # ── Optional filters ──────────────────────────────────────────────────────
+    action_type: ActionType | None = Query(
+        default=None,
+        description="Filter to files scoped to this action type",
+    ),
+    action_index: int | None = Query(
+        default=None,
+        ge=0,
+        description="Filter to files scoped to this action index",
+    ),
 ):
-    """Return all evidence files attached to a step."""
+    """
+    Return evidence files attached to a step.
+
+    - No filter params  → all files for the step (step-level + all action files)
+    - ?action_type=occurrence&action_index=0  → only files for that specific action
+    - ?action_type=occurrence  → all occurrence action files (any index)
+    """
     _get_step_or_404(step_id, db)
 
-    step_files = (
+    q = (
         db.query(StepFile)
         .filter(StepFile.report_step_id == step_id)
         .join(StepFile.file)
         .order_by(FileModel.created_at)
-        .all()
     )
-    return [_serialize(sf) for sf in step_files]
+
+    if action_type is not None:
+        q = q.filter(StepFile.action_type == action_type)
+    if action_index is not None:
+        q = q.filter(StepFile.action_index == action_index)
+
+    return [_serialize(sf, request) for sf in q.all()]
 
 
 @router.delete("/{step_id}/files/{step_file_id}")
@@ -225,37 +270,23 @@ def delete_file(
     step_file_id: int,
     db: Session = Depends(get_db),
 ):
-    """
-    Delete a step_files row, the underlying files row, and the file on disk.
-    Uses step_file_id (step_files.id), not files.id.
-    """
+    """Delete a step_files row, the underlying files row, and the file on disk."""
     sf = (
         db.query(StepFile)
-        .filter(
-            StepFile.id == step_file_id,
-            StepFile.report_step_id == step_id,
-        )
+        .filter(StepFile.id == step_file_id, StepFile.report_step_id == step_id)
         .first()
     )
     if not sf:
         raise HTTPException(status_code=404, detail="File attachment not found")
 
-    # Remove from disk first (before DB so we don't leave orphan files if DB fails)
     disk_path = Path(sf.file.stored_path)
-    file_record = sf.file   # capture reference before deleting join row
+    file_record = sf.file
 
-    # Step 1: delete the join row (step_files)
     db.delete(sf)
     db.flush()
-
-    # Step 2: delete the file record (files table)
-    # The File model has cascade="all, delete-orphan" on step_files,
-    # meaning SQLAlchemy manages StepFile children when File is deleted.
-    # But since we already removed the StepFile row above, we delete File directly.
     db.delete(file_record)
     db.commit()
 
-    # Remove from disk after successful DB commit
     if disk_path.exists():
         disk_path.unlink()
 
@@ -271,10 +302,7 @@ def download_file(
     """Serve / preview a file inline."""
     sf = (
         db.query(StepFile)
-        .filter(
-            StepFile.id == step_file_id,
-            StepFile.report_step_id == step_id,
-        )
+        .filter(StepFile.id == step_file_id, StepFile.report_step_id == step_id)
         .first()
     )
     if not sf:
@@ -285,7 +313,64 @@ def download_file(
         raise HTTPException(status_code=404, detail="File missing from disk")
 
     return FileResponse(
-        path        = str(disk_path),
-        filename    = sf.file.original_name,
-        media_type  = sf.file.mime_type or "application/octet-stream",
+        path      =str(disk_path),
+        filename  =sf.file.original_name,
+        media_type=sf.file.mime_type or "application/octet-stream",
     )
+
+
+
+@router.post("/{step_id}/files/{step_file_id}/copy")
+def copy_file_to_action(
+    step_id: int,
+    step_file_id: int,
+    action_type: ActionType = Query(...),
+    action_index: int = Query(..., ge=0),
+    request: Request = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Copy an existing file attachment to a different action scope.
+    Creates a NEW StepFile row pointing at the same File record.
+    Deletions are independent — deleting from Action A won't affect Action B.
+
+    POST /api/v1/steps/42/files/7/copy?action_type=detection&action_index=1
+    """
+    _get_step_or_404(step_id, db)
+
+    source = (
+        db.query(StepFile)
+        .filter(StepFile.id == step_file_id, StepFile.report_step_id == step_id)
+        .first()
+    )
+    if not source:
+        raise HTTPException(status_code=404, detail="Source file not found")
+
+    # Check it won't violate the new unique constraint
+    exists = (
+        db.query(StepFile)
+        .filter(
+            StepFile.report_step_id == step_id,
+            StepFile.file_id == source.file_id,
+            StepFile.action_type == action_type,
+            StepFile.action_index == action_index,
+        )
+        .first()
+    )
+    if exists:
+        raise HTTPException(
+            status_code=409,
+            detail="This file is already attached to that action.",
+        )
+
+    new_sf = StepFile(
+        report_step_id=step_id,
+        file_id=source.file_id,   # same underlying File — no re-upload
+        action_type=action_type,
+        action_index=action_index,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(new_sf)
+    db.commit()
+    db.refresh(new_sf)
+    return _serialize(new_sf, request)

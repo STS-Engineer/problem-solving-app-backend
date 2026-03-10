@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI, OpenAIError
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -164,7 +165,7 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
             if isinstance(f, dict)
             and str(f.get("is_problem", "")).strip()
             and str(f.get("is_not_problem", "")).strip()
-        ) >= 3
+        ) >= 2
 
     if section_key == "containment":
         dps = extracted.get("defected_part_status", {})
@@ -337,7 +338,6 @@ def _build_smart_opening(
         "STRICT RULES for this opening:",
         "  - Do NOT ask for anything already in [ALREADY KNOWN].",
         "  - Do NOT list all the fields you need to fill.",
-        "  - Do NOT say 'Let me walk you through...' or similar robotic openers.",
     ]
 
     _OPENING_HINTS = {
@@ -405,7 +405,6 @@ class ConversationService:
         self.db = db
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
-    # ── Public API ─────────────────────────────────────────────────────────────
 
     def get_current_step_data(self, step_id: int) -> Dict[str, Any]:
         from app.models.report_step import ReportStep
@@ -456,6 +455,8 @@ class ConversationService:
         uploaded_file_names: Optional[List[str]] = None,
         kb_coaching: str = "",
         twenty_rules: str = "",
+        action_type: Optional[str] = None,
+        action_index: Optional[int] = None,
     ) -> Dict[str, Any]:
         effective_message = user_message
         if uploaded_file_names:
@@ -463,6 +464,12 @@ class ConversationService:
             effective_message = (
                 f"{user_message}\n\n📎 Uploaded: {file_list}" if user_message.strip()
                 else f"📎 Uploaded: {file_list}"
+            )
+        if action_type is not None and action_index is not None and uploaded_file_names:
+            scope_label = f"{action_type} action #{action_index + 1}"
+            effective_message = (
+                effective_message
+                + f"\n\n[Context: files above are evidence for the {scope_label}]"
             )
 
         history = self._load_messages(step_id, section_key)
@@ -474,7 +481,6 @@ class ConversationService:
 
         existing_files = self._get_step_file_names(step_id)
         all_step_data  = _collect_all_step_data(self.db, step_id)
-
         bot_reply = self._call_ai(
             section_key=section_key,
             history=history,
@@ -548,13 +554,34 @@ class ConversationService:
     # ── Internal ───────────────────────────────────────────────────────────────
 
     def _get_step_file_names(self, step_id: int) -> List[str]:
+        """
+        Return filenames for all files attached to this step.
+        For D6 per-action files, prefix with the action scope so the AI knows
+        which corrective action each file belongs to.
+
+        Examples:
+          "photo.jpg"                             ← step-level (no action scope)
+          "[occurrence #1] weld_photo.jpg"        ← scoped to occurrence action 0
+          "[detection #2] updated_cp.pdf"         ← scoped to detection action 1
+        """
         rows = (
-            self.db.query(FileModel.original_name)
+            self.db.query(
+                FileModel.original_name,
+                StepFile.action_type,
+                StepFile.action_index,
+            )
             .join(StepFile, StepFile.file_id == FileModel.id)
             .filter(StepFile.report_step_id == step_id)
             .all()
         )
-        return [r.original_name for r in rows]
+        result = []
+        for name, action_type, action_index in rows:
+            if action_type is not None and action_index is not None:
+                # Human-readable label: 1-based index
+                result.append(f"[{action_type} #{action_index + 1}] {name}")
+            else:
+                result.append(name)
+        return result
 
     def _call_ai(
         self,
@@ -593,13 +620,13 @@ class ConversationService:
         system = CONV_SYSTEM_PROMPT
 
         # ── Layer 2: floor rules (always apply, highest company-level priority) ─
-        if twenty_rules:
-            system += (
-                "\n\n════════════════════════════════════════\n"
-                "FLOOR RULES — NON-NEGOTIABLE, APPLY TO EVERY SECTION\n"
-                "════════════════════════════════════════\n"
-                + twenty_rules
-            )
+        # if twenty_rules:
+        #     system += (
+        #         "\n\n════════════════════════════════════════\n"
+        #         "FLOOR RULES — NON-NEGOTIABLE, APPLY TO EVERY SECTION\n"
+        #         "════════════════════════════════════════\n"
+        #         + twenty_rules
+        #     )
 
         # ── Layer 3: complaint + confirmed prior step data ─────────────────────
         system += "\n\n" + already_known
@@ -609,16 +636,16 @@ class ConversationService:
             system += "\n\n" + coaching_rules
 
         # ── Layer 5: KB content — internal standards for this step ────────────
-        if kb_coaching:
-            system += (
-                "\n\n════════════════════════════════════════\n"
-                "KNOWLEDGE BASE — VALIDATED RULES FOR THIS STEP\n"
-                "════════════════════════════════════════\n"
-                "The following content comes from the internal knowledge base.\n"
-                "Use it to validate user answers, catch deviations, and propose\n"
-                "corrections. It takes precedence over generic 8D knowledge.\n\n"
-                + kb_coaching
-            )
+        # if kb_coaching:
+        #     system += (
+        #         "\n\n════════════════════════════════════════\n"
+        #         "KNOWLEDGE BASE — VALIDATED RULES FOR THIS STEP\n"
+        #         "════════════════════════════════════════\n"
+        #         "The following content comes from the internal knowledge base.\n"
+        #         "Use it to validate user answers, catch deviations, and propose\n"
+        #         "corrections. It takes precedence over generic 8D knowledge.\n\n"
+        #         + kb_coaching
+        #     )
 
         # ── Layer 6: extraction gate ───────────────────────────────────────────
         system += (
@@ -653,6 +680,8 @@ class ConversationService:
             "   separately before telling the user no match was found.\n"
             "6. NEVER invent or guess member details. Always call the tool first."
         )
+        # logger.info("******************************")
+        # logger.info("system prompt: %s", system)
 
         # ── Build message list ─────────────────────────────────────────────────
         openai_messages = [{"role": "system", "content": system}]
@@ -712,6 +741,8 @@ class ConversationService:
                 max_completion_tokens=1400,
                 timeout=30,
             )
+            # logger.info("******************************")
+            # logger.info("final response: %s", final.choices[0].message.content)
             return (final.choices[0].message.content or "").strip()
 
         except OpenAIError as e:
@@ -863,3 +894,30 @@ class ConversationService:
                 if extracted and _section_is_complete(section_key, extracted):
                     return "fulfilled"
         return "opening" if len(messages) <= 1 else "collecting"
+    
+
+    def get_complaint_context(self, report_step_id: int) -> Dict:
+        query = text("""
+            SELECT
+                c.complaint_name,
+                c.complaint_description,
+                c.product_line,
+                c.avocarbon_plant,
+                c.defects
+            FROM complaints c
+            JOIN reports r ON c.id = r.complaint_id
+            JOIN report_steps rs ON r.id = rs.report_id
+            WHERE rs.id = :report_step_id
+        """)
+        result = self.db.execute(query, {"report_step_id": report_step_id}).fetchone()
+        if result:
+            context = {
+                "complaint_name": result[0] or "",
+                "complaint_description": result[1] or "",
+                "product_line": result[2] or "",
+                "plant": result[3] or "",
+                "defects": result[4] or "",
+            }
+            return context
+        logger.warning("⚠️ No complaint found for report_step_id %d", report_step_id)
+        return {}

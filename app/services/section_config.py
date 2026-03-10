@@ -87,13 +87,14 @@ D5_SECTIONS: SectionDef = {
 # D6 — Implementation & Effectiveness
 #
 # Frontend section keys (2 tabs):
-#   "implementation"        → tab 1
-#   "monitoring_checklist"  → tab 2  (monitoring + checklist merged)
+#   "implementation"        → tab 1: actions + evidence file upload
+#   "monitoring_checklist"  → tab 2: monitoring + checklist merged
 # ---------------------------------------------------------------------------
 D6_SECTIONS: SectionDef = {
     "implementation": [
         "corrective_actions_occurrence",
         "corrective_actions_detection",
+        "evidence_documents",          # ← files uploaded via UI or chat
     ],
     "monitoring_checklist": [
         "monitoring",
@@ -152,22 +153,9 @@ STEP_SECTIONS: Dict[str, SectionDef] = {
 }
 
 
-def get_section_fields(step_code: str, section_key: str) -> List[str]:
-    """Return the list of data fields for a given step+section."""
-    step_def = STEP_SECTIONS.get(step_code)
-    if not step_def:
-        raise ValueError(f"No section config for step '{step_code}'")
-    fields = step_def.get(section_key)
-    if fields is None:
-        raise ValueError(f"Unknown section '{section_key}' for step '{step_code}'")
-    return fields
-
-
 def get_all_section_keys(step_code: str) -> List[str]:
     """Return all section keys for a step."""
     step_def = STEP_SECTIONS.get(step_code)
     if not step_def:
         return []
     return list(step_def.keys())
-
-

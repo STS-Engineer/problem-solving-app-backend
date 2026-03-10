@@ -182,13 +182,13 @@ class KnowledgeBaseRetriever:
             hint = self.SECTION_HINT_MAP[step_code]
             content = _fetch(hint)
             if content:
-                logger.info(
-                    "\n%s\n📚 [KB COACHING] step_code='%s'\n"
-                    "   strategy : EXPLICIT MAP\n"
-                    "   hint     : %s\n"
-                    "   chars    : %d\n%s",
-                    SEP, step_code, hint, len(content), SEP,
-                )
+                # logger.info(
+                #     "\n%s\n📚 [KB COACHING] step_code='%s'\n"
+                #     "   strategy : EXPLICIT MAP\n"
+                #     "   hint     : %s\n"
+                #     "   chars    : %d\n%s",
+                #     SEP, step_code, hint, len(content), SEP,
+                # )
                 return content
             logger.warning(
                 "⚠️  [KB COACHING] Explicit hint '%s' not found in DB for '%s'",
@@ -200,14 +200,14 @@ class KnowledgeBaseRetriever:
             hint = f"{parent_code}_coaching_validation"
             content = _fetch(hint)
             if content:
-                logger.info(
-                    "\n%s\n📚 [KB COACHING] step_code='%s'\n"
-                    "   strategy : PARENT SHARED CHUNK\n"
-                    "   hint     : %s\n"
-                    "   chars    : %d\n"
-                    "   note     : model will use the sub-section relevant part\n%s",
-                    SEP, step_code, hint, len(content), SEP,
-                )
+                # logger.info(
+                #     "\n%s\n📚 [KB COACHING] step_code='%s'\n"
+                #     "   strategy : PARENT SHARED CHUNK\n"
+                #     "   hint     : %s\n"
+                #     "   chars    : %d\n"
+                #     "   note     : model will use the sub-section relevant part\n%s",
+                #     SEP, step_code, hint, len(content), SEP,
+                # )
                 return content
             logger.warning(
                 "⚠️  [KB COACHING] Parent hint '%s' not found in DB for '%s'",
@@ -234,13 +234,13 @@ class KnowledgeBaseRetriever:
         hint = f"{step_code}_coaching_validation"
         content = _fetch(hint)
         if content:
-            logger.info(
-                "\n%s\n📚 [KB COACHING] step_code='%s'\n"
-                "   strategy : GENERIC FALLBACK\n"
-                "   hint     : %s\n"
-                "   chars    : %d\n%s",
-                SEP, step_code, hint, len(content), SEP,
-            )
+            # logger.info(
+            #     "\n%s\n📚 [KB COACHING] step_code='%s'\n"
+            #     "   strategy : GENERIC FALLBACK\n"
+            #     "   hint     : %s\n"
+            #     "   chars    : %d\n%s",
+            #     SEP, step_code, hint, len(content), SEP,
+            # )
             return content
 
         # ── Nothing found ─────────────────────────────────────────────────────
@@ -265,38 +265,12 @@ class KnowledgeBaseRetriever:
         """)
         result = self.db.execute(query).fetchone()
         if result and result[0]:
-            logger.info("📜 20 Rules loaded (%d chars)", len(result[0]))
+            # logger.info("📜 20 Rules loaded (%d chars)", len(result[0]))
             return result[0]
         logger.warning("⚠️ 20 Rules not found in KB")
         return ""
 
-    def get_complaint_context(self, report_step_id: int) -> Dict:
-        query = text("""
-            SELECT
-                c.complaint_name,
-                c.complaint_description,
-                c.product_line,
-                c.avocarbon_plant,
-                c.defects
-            FROM complaints c
-            JOIN reports r ON c.id = r.complaint_id
-            JOIN report_steps rs ON r.id = rs.report_id
-            WHERE rs.id = :report_step_id
-        """)
-        result = self.db.execute(query, {"report_step_id": report_step_id}).fetchone()
-        if result:
-            context = {
-                "complaint_name": result[0] or "",
-                "complaint_description": result[1] or "",
-                "product_line": result[2] or "",
-                "plant": result[3] or "",
-                "defects": result[4] or "",
-            }
-            logger.info("📋 Complaint context loaded: %s", context["complaint_name"])
-            return context
-        logger.warning("⚠️ No complaint found for report_step_id %d", report_step_id)
-        return {}
-
+    
 
 # ============================================================
 # STEP DATA FORMATTER

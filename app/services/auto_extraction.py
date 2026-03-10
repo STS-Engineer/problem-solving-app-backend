@@ -94,8 +94,6 @@ WHEN     : Extract dates only from {customer_complaint_date}. Use ISO format YYY
              If not explicitly stated, leave "".
 
   WHY      : Why is this a problem? Link to functional impact.
-             Format: "This defect causes [functional risk] in the
-             [application], classified as [priority/quality type]."
              If not determinable, leave "".
 
   HOW      : Detection method only if explicitly stated in the description.

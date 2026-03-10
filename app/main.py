@@ -17,7 +17,8 @@ from sqlalchemy import text
 from app.api.router import api_router
 from app.db.session import AsyncSessionLocal, async_engine
 from app.services.scheduler import is_scheduler_running, start_scheduler, stop_scheduler
-
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 
 def _configure_logging() -> None:
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -29,17 +30,17 @@ def _configure_logging() -> None:
         "apscheduler",
     ):
         log = logging.getLogger(name)
-        log.setLevel(logging.DEBUG)
+        log.setLevel(logging.INFO)
         log.propagate = True
 
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
+    root.setLevel(logging.INFO)
     root.handlers.clear()
     root.addHandler(handler)
 
 
 _configure_logging()
-logger = logging.getLogger(__name__)  # ← must come AFTER _configure_logging()
+logger = logging.getLogger(__name__)  
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 _AZURE_URL = os.getenv(
@@ -75,7 +76,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("AVOCarbon API stopped.")
 
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+UPLOADS_ROOT = Path(os.getenv("UPLOAD_DIR", BASE_DIR / "uploads"))
+UPLOADS_ROOT.mkdir(parents=True, exist_ok=True)
+
 app = FastAPI(title="AVOCarbon Complaints / 8D Report API", lifespan=lifespan)
+app.state.uploads_root = UPLOADS_ROOT
+
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_ROOT)), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
@@ -118,3 +126,4 @@ async def readiness() -> JSONResponse:
         content={"status": overall, "checks": checks},
         status_code=200 if overall == "ok" else 503,
     )
+
