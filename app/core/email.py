@@ -15,7 +15,6 @@ SMTP_HOST = os.getenv("SMTP_HOST", "localhost")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "25"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASSWORD", "")
-SMTP_TIMEOUT_S = int(os.getenv("SMTP_TIMEOUT_S", "10"))  # seconds before giving up
 
 
 def _send_sync(
@@ -43,7 +42,7 @@ def _send_sync(
         SMTP_HOST, SMTP_PORT, SMTP_USER, all_recipients,
     )
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_S) as server:
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
         # if SMTP_USER and SMTP_PASS:
         #     server.login(SMTP_USER, SMTP_PASS)
         server.sendmail(SMTP_USER, all_recipients, msg.as_string())
