@@ -1,18 +1,5 @@
 """
 app/services/scheduler.py
-
-Uses BackgroundScheduler with FULLY SYNCHRONOUS job functions.
-No async bridging (run_coroutine_threadsafe) — that pattern is unreliable on
-Azure App Service because the uvicorn event loop lifecycle is not guaranteed
-to be in the expected state when accessed from a background thread.
-
-Pattern (matches the working CAR reminder app):
-  - BackgroundScheduler fires jobs in its own thread pool
-  - Jobs use sync SessionLocal (not AsyncSessionLocal)
-  - SMTP is called directly (smtplib is already synchronous)
-  - Advisory locks use psycopg2-style raw SQL via sync session
-
-This is simpler, more portable, and proven to work on Azure.
 """
 from __future__ import annotations
 
@@ -34,7 +21,7 @@ load_dotenv()
 TEST_MODE = os.getenv("TEST_ESCALATION", "false").lower() == "true"
 DEV_MODE  = os.getenv("DEV_MODE", "false").lower() == "true"
 
-CHECK_INTERVAL_MINUTES = 2 if TEST_MODE else 10
+CHECK_INTERVAL_MINUTES = 3 if TEST_MODE else 10
 RETRY_INTERVAL_MINUTES = 10
 
 LOCK_ID_ESCALATION = 8_001
