@@ -42,8 +42,6 @@ router = APIRouter()
 
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-
-UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/uploads/8d"))
 MAX_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
 SYSTEM_USER_ID: int = int(os.environ.get("SYSTEM_USER_ID", "1"))
 
@@ -59,16 +57,6 @@ ALLOWED_EXTENSIONS = {
 }
 
 ActionType = Literal["occurrence", "detection"]
-
-
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-
-from pathlib import Path
-
-def _upload_dir(request: Request) -> Path:
-    upload_dir = Path(request.app.state.uploads_root) / "8d"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    return upload_dir
 
 
 def _sha256(data: bytes) -> str:
@@ -202,7 +190,7 @@ async def upload_file(
     db_file = FileModel(
         purpose       ="evidence",
         original_name =original_name,
-        stored_path   =stored_name,
+        stored_path = stored_name,
         size_bytes    =len(content),
         mime_type     =mime_type,
         uploaded_by   =SYSTEM_USER_ID,
@@ -300,6 +288,7 @@ def delete_file(
 def download_file(
     step_id: int,
     step_file_id: int,
+    request:Request,
     db: Session = Depends(get_db),
 ):
     """Serve / preview a file inline."""
@@ -311,7 +300,8 @@ def download_file(
     if not sf:
         raise HTTPException(status_code=404, detail="File not found")
 
-    disk_path = Path(sf.file.stored_path)
+    upload_base = Path(request.app.state.uploads_root) / "8d"
+    disk_path = upload_base / sf.file.stored_path
     if not disk_path.exists():
         raise HTTPException(status_code=404, detail="File missing from disk")
 
