@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
 
-_TOKEN  = os.environ.get("GITHUB_TOKEN", "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")
+_TOKEN  = os.environ.get("GITHUB_TOKEN", "")
 _OWNER  = os.environ.get("GITHUB_OWNER", "STS-Engineer")
 _REPO   = os.environ.get("GITHUB_REPO", "problem-solving-app-backend")
 _BRANCH = os.environ.get("GITHUB_BRANCH", "uploads")
