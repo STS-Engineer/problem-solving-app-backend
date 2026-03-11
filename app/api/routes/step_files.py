@@ -2,41 +2,32 @@
 app/api/routes/step_files.py
 
 Evidence file upload / list / delete / serve for 8D report steps.
+Files are stored in the GitHub repository via FileStorageService.
 
 Endpoints (all mounted under /api/v1/steps):
-  POST   /{step_id}/files                         – upload one file (optionally scoped to an action)
+  POST   /{step_id}/files                         – upload one file
   GET    /{step_id}/files                         – list all files for a step
   GET    /{step_id}/files?action_type=X&action_index=Y – list files for a specific action
   DELETE /{step_id}/files/{step_file_id}          – detach + delete file
-  GET    /{step_id}/files/{step_file_id}/download – serve file content
-
-Action scoping (D6 per-action evidence)
-----------------------------------------
-Pass action_type and action_index as query params on POST to scope a file
-to a specific corrective action row:
-
-  POST /api/v1/steps/42/files?action_type=occurrence&action_index=0
-  POST /api/v1/steps/42/files?action_type=detection&action_index=2
-
-Files uploaded without these params are "step-level" — existing behaviour.
+  GET    /{step_id}/files/{step_file_id}/download – redirect to raw GitHub URL
 """
 
 import hashlib
 import mimetypes
 import os
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.models.file import File as FileModel
 from app.models.step_file import StepFile
 from app.models.report_step import ReportStep
+from app.services.file_storage import storage
 
 router = APIRouter()
 
@@ -79,15 +70,13 @@ def _file_icon(mime_type: str) -> str:
     return "📎"
 
 
-def _serialize(sf: StepFile, request: Request) -> dict:
+def _serialize(sf: StepFile) -> dict:
     f = sf.file
-    base_url = str(request.base_url).rstrip("/")
-    download_url = f"{base_url}/api/v1/steps/{sf.report_step_id}/files/{sf.id}/download"
     return {
         "id":           sf.id,
         "file_id":      f.id,
         "filename":     f.original_name,
-        "url":          download_url,
+        "url":          storage.url_for(f.stored_path),
         "mime_type":    f.mime_type or "application/octet-stream",
         "size_bytes":   f.size_bytes,
         "size_label":   _human_size(f.size_bytes),
@@ -95,7 +84,6 @@ def _serialize(sf: StepFile, request: Request) -> dict:
         "is_image":     (f.mime_type or "").startswith("image/"),
         "uploaded_at":  f.created_at.isoformat() if f.created_at else None,
         "checksum":     f.checksum,
-        # Action scope — null for step-level files
         "action_type":  sf.action_type,
         "action_index": sf.action_index,
     }
@@ -113,12 +101,8 @@ def _get_step_or_404(step_id: int, db: Session) -> ReportStep:
 @router.post("/{step_id}/files")
 async def upload_file(
     step_id: int,
-    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    # ── Action scope (optional) ──────────────────────────────────────────────
-    # Pass these to link the file to a specific D6 corrective action.
-    # Omit both for step-level files (D1-D5, D7-D8, or step-wide D6 files).
     action_type: ActionType | None = Query(
         default=None,
         description="'occurrence' or 'detection' — required when action_index is set",
@@ -129,15 +113,9 @@ async def upload_file(
         description="0-based index of the corrective action in the D6 action array",
     ),
 ):
-    """
-    Upload a single evidence file and attach it to the step.
-
-    For D6 per-action evidence, also pass ?action_type=occurrence&action_index=0
-    (or detection / any valid index). Files without these params are step-level.
-    """
+    """Upload a single evidence file and attach it to the step."""
     _get_step_or_404(step_id, db)
 
-    # Validate that action_type and action_index are either both set or both absent
     if (action_type is None) != (action_index is None):
         raise HTTPException(
             status_code=422,
@@ -157,7 +135,6 @@ async def upload_file(
 
     if len(content) == 0:
         raise HTTPException(status_code=422, detail="Uploaded file is empty.")
-
     if len(content) > MAX_SIZE_BYTES:
         raise HTTPException(
             status_code=413,
@@ -171,26 +148,27 @@ async def upload_file(
     )
     if mime_type == "image/jpg":
         mime_type = "image/jpeg"
-
     if mime_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(
             status_code=422,
             detail=f"MIME type '{mime_type}' is not allowed.",
         )
 
-    # Save to disk
-    stored_name = f"{uuid.uuid4().hex}{ext}"
-    upload_base = Path(request.app.state.uploads_root) / "8d"
-    upload_base.mkdir(parents=True, exist_ok=True)
+    # ── Upload to GitHub ──────────────────────────────────────────────────────
+    try:
+        result = await storage.upload(
+            content=content,
+            original_name=original_name,
+            mime_type=mime_type,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"GitHub upload failed: {exc}")
 
-    dest = upload_base / stored_name
-    dest.write_bytes(content)
-
-    # Insert file record
+    # ── Persist to DB ─────────────────────────────────────────────────────────
     db_file = FileModel(
         purpose       ="evidence",
         original_name =original_name,
-        stored_path = stored_name,
+        stored_path   =result["stored_name"],   # uuid.ext — leaf name only
         size_bytes    =len(content),
         mime_type     =mime_type,
         uploaded_by   =SYSTEM_USER_ID,
@@ -200,7 +178,6 @@ async def upload_file(
     db.add(db_file)
     db.flush()
 
-    # Insert step_file join row (with optional action scope)
     step_file = StepFile(
         report_step_id=step_id,
         file_id       =db_file.id,
@@ -212,32 +189,17 @@ async def upload_file(
     db.commit()
     db.refresh(step_file)
 
-    return _serialize(step_file, request)
+    return _serialize(step_file)
 
 
 @router.get("/{step_id}/files")
 def list_files(
     step_id: int,
-    request: Request,
     db: Session = Depends(get_db),
-    # ── Optional filters ──────────────────────────────────────────────────────
-    action_type: ActionType | None = Query(
-        default=None,
-        description="Filter to files scoped to this action type",
-    ),
-    action_index: int | None = Query(
-        default=None,
-        ge=0,
-        description="Filter to files scoped to this action index",
-    ),
+    action_type: ActionType | None = Query(default=None),
+    action_index: int | None = Query(default=None, ge=0),
 ):
-    """
-    Return evidence files attached to a step.
-
-    - No filter params  → all files for the step (step-level + all action files)
-    - ?action_type=occurrence&action_index=0  → only files for that specific action
-    - ?action_type=occurrence  → all occurrence action files (any index)
-    """
+    """Return evidence files attached to a step."""
     _get_step_or_404(step_id, db)
 
     q = (
@@ -252,16 +214,16 @@ def list_files(
     if action_index is not None:
         q = q.filter(StepFile.action_index == action_index)
 
-    return [_serialize(sf, request) for sf in q.all()]
+    return [_serialize(sf) for sf in q.all()]
 
 
 @router.delete("/{step_id}/files/{step_file_id}")
-def delete_file(
+async def delete_file(
     step_id: int,
     step_file_id: int,
     db: Session = Depends(get_db),
 ):
-    """Delete a step_files row, the underlying files row, and the file on disk."""
+    """Delete a step_files row, the underlying files row, and the file on GitHub."""
     sf = (
         db.query(StepFile)
         .filter(StepFile.id == step_file_id, StepFile.report_step_id == step_id)
@@ -270,7 +232,7 @@ def delete_file(
     if not sf:
         raise HTTPException(status_code=404, detail="File attachment not found")
 
-    disk_path = Path(sf.file.stored_path)
+    stored_name = sf.file.stored_path
     file_record = sf.file
 
     db.delete(sf)
@@ -278,20 +240,28 @@ def delete_file(
     db.delete(file_record)
     db.commit()
 
-    if disk_path.exists():
-        disk_path.unlink()
+    # Best-effort GitHub deletion (don't fail the request if GitHub is slow)
+    try:
+        await storage.delete(stored_name)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "GitHub delete failed for %s: %s", stored_name, exc
+        )
 
     return {"deleted": True, "step_file_id": step_file_id}
 
 
 @router.get("/{step_id}/files/{step_file_id}/download")
-def download_file(
+async def download_file(
     step_id: int,
     step_file_id: int,
-    request:Request,
     db: Session = Depends(get_db),
 ):
-    """Serve / preview a file inline."""
+    """
+    Proxy the file content from the private GitHub repo to the browser.
+    Supports both inline preview (images/PDF) and download.
+    """
     sf = (
         db.query(StepFile)
         .filter(StepFile.id == step_file_id, StepFile.report_step_id == step_id)
@@ -300,17 +270,26 @@ def download_file(
     if not sf:
         raise HTTPException(status_code=404, detail="File not found")
 
-    upload_base = Path(request.app.state.uploads_root) / "8d"
-    disk_path = upload_base / sf.file.stored_path
-    if not disk_path.exists():
-        raise HTTPException(status_code=404, detail="File missing from disk")
+    mime_type     = sf.file.mime_type or "application/octet-stream"
+    original_name = sf.file.original_name
+    stored_name   = sf.file.stored_path
 
-    return FileResponse(
-        path      =str(disk_path),
-        filename  =sf.file.original_name,
-        media_type=sf.file.mime_type or "application/octet-stream",
+    try:
+        content = await storage.fetch_content(stored_name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File missing from GitHub")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"GitHub fetch failed: {exc}")
+
+    # Images and PDFs open inline in the browser; everything else forces download
+    is_previewable = mime_type.startswith("image/") or mime_type == "application/pdf"
+    disposition    = "inline" if is_previewable else f'attachment; filename="{original_name}"'
+
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={"Content-Disposition": disposition},
     )
-
 
 
 @router.post("/{step_id}/files/{step_file_id}/copy")
@@ -319,15 +298,12 @@ def copy_file_to_action(
     step_file_id: int,
     action_type: ActionType = Query(...),
     action_index: int = Query(..., ge=0),
-    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """
     Copy an existing file attachment to a different action scope.
     Creates a NEW StepFile row pointing at the same File record.
-    Deletions are independent — deleting from Action A won't affect Action B.
-
-    POST /api/v1/steps/42/files/7/copy?action_type=detection&action_index=1
+    No re-upload needed — the GitHub blob is shared.
     """
     _get_step_or_404(step_id, db)
 
@@ -339,14 +315,13 @@ def copy_file_to_action(
     if not source:
         raise HTTPException(status_code=404, detail="Source file not found")
 
-    # Check it won't violate the new unique constraint
     exists = (
         db.query(StepFile)
         .filter(
             StepFile.report_step_id == step_id,
-            StepFile.file_id == source.file_id,
-            StepFile.action_type == action_type,
-            StepFile.action_index == action_index,
+            StepFile.file_id        == source.file_id,
+            StepFile.action_type    == action_type,
+            StepFile.action_index   == action_index,
         )
         .first()
     )
@@ -358,12 +333,12 @@ def copy_file_to_action(
 
     new_sf = StepFile(
         report_step_id=step_id,
-        file_id=source.file_id,   # same underlying File — no re-upload
-        action_type=action_type,
-        action_index=action_index,
-        created_at=datetime.now(timezone.utc),
+        file_id       =source.file_id,
+        action_type   =action_type,
+        action_index  =action_index,
+        created_at    =datetime.now(timezone.utc),
     )
     db.add(new_sf)
     db.commit()
     db.refresh(new_sf)
-    return _serialize(new_sf, request)
+    return _serialize(new_sf)

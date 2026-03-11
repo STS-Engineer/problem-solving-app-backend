@@ -1,5 +1,5 @@
 """
-app/routers/conversations.py  
+app/routers/conversations.py
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from app.services.audit_service import (
 )
 from app.services.chatbot_service import KnowledgeBaseRetriever
 from app.services.conversation_service import ConversationService
-from pathlib import Path
+from app.services.file_storage import storage
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,6 @@ router = APIRouter()
 
 # ── File upload config ────────────────────────────────────────────────────────
 
-UPLOAD_DIR = Path("/home/uploads/8d")
 MAX_SIZE_BYTES = 25 * 1024 * 1024
 SYSTEM_USER_ID: int = int(os.environ.get("SYSTEM_USER_ID", "1"))
 
@@ -52,13 +51,6 @@ ALLOWED_MIME_TYPES = {
 }
 
 _EVIDENCE_SYNC_SECTIONS = {"deviation", "implementation"}
-
-
-
-def _upload_dir(request: Request) -> Path:
-    upload_dir = Path(request.app.state.uploads_root) / "8d"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    return upload_dir
 
 
 def _sha256(data: bytes) -> str:
@@ -87,7 +79,7 @@ def _serialize_file(sf: StepFile) -> dict:
         "id":           sf.id,
         "file_id":      f.id,
         "filename":     f.original_name,
-        "stored_path":  f.stored_path,
+        "url":          storage.url_for(f.stored_path),
         "mime_type":    f.mime_type or "application/octet-stream",
         "size_bytes":   f.size_bytes,
         "size_label":   _human_size(f.size_bytes),
@@ -157,7 +149,6 @@ VALID_ACTION_TYPES = {"occurrence", "detection"}
 
 
 def _require_section(section_key: str) -> None:
-    # Accept plain keys AND structured "implementation:occurrence:0" keys
     base_key = section_key.split(":")[0]
     if base_key not in VALID_SECTION_KEYS:
         raise HTTPException(
@@ -174,17 +165,9 @@ def _parse_action_scope(
     action_type_param: str | None,
     action_index_param: int | None,
 ) -> tuple[str, str | None, int | None]:
-    """
-    Resolve (base_section_key, action_type, action_index) from either:
-      - a structured section_key like "implementation:occurrence:0"
-      - OR explicit query params action_type + action_index
-
-    Query params take precedence over encoded section_key.
-    """
     parts = section_key.split(":")
     base_key = parts[0]
 
-    # Default from encoded key
     enc_action_type: str | None = None
     enc_action_index: int | None = None
     if len(parts) == 3:
@@ -194,11 +177,9 @@ def _parse_action_scope(
         except (ValueError, IndexError):
             enc_action_index = None
 
-    # Query params override
-    action_type = action_type_param if action_type_param is not None else enc_action_type
+    action_type  = action_type_param  if action_type_param  is not None else enc_action_type
     action_index = action_index_param if action_index_param is not None else enc_action_index
 
-    # Validate consistency
     if (action_type is None) != (action_index is None):
         raise HTTPException(
             status_code=422,
@@ -218,10 +199,8 @@ def _parse_action_scope(
 class SendMessageRequest(BaseModel):
     message: str
     uploaded_file_names: list[str] | None = None
-    # D6 per-action context — tells the AI which corrective action
-    # the uploaded files belong to (mirrors the upload endpoint scope)
-    action_type: str | None = None   # "occurrence" | "detection"
-    action_index: int | None = None  # 0-based
+    action_type: str | None = None
+    action_index: int | None = None
 
 
 class ConversationResponse(BaseModel):
@@ -311,7 +290,7 @@ def send_message(
             action_type=body.action_type or None,
             action_index=body.action_index,
             kb_coaching=kb_coaching,
-            twenty_rules=twenty_rules
+            twenty_rules=twenty_rules,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -324,7 +303,7 @@ def send_message(
     if extracted:
         try:
             changed = [k for k, v in extracted.items() if existing_data.get(k) != v]
-            first_fill = _is_first_fill( previous_state, new_state)
+            first_fill = _is_first_fill(previous_state, new_state)
             if first_fill:
                 log_step_filled_sync(db, ctx.complaint_id, ctx.report_id, step_id,
                                      ctx.step_code, fields_snapshot=extracted,
@@ -359,28 +338,12 @@ def send_message(
 async def upload_conversation_files(
     step_id: int,
     section_key: str,
-    request: Request,
     files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
-    action_type: str | None = Query(
-        default=None,
-        description="'occurrence' | 'detection' — scope upload to a specific D6 action",
-    ),
-    action_index: int | None = Query(
-        default=None,
-        ge=0,
-        description="0-based index of the D6 corrective action",
-    ),
+    action_type: str | None = Query(default=None),
+    action_index: int | None = Query(default=None, ge=0),
 ):
-    """
-    Upload evidence file(s) from the ChatCoach panel.
-
-    For D6 per-action uploads, pass either:
-      - ?action_type=occurrence&action_index=0  as query params, OR
-      - encode in the section_key: "implementation:occurrence:0"
-
-    Both methods are equivalent. Query params take precedence.
-    """
+    """Upload evidence file(s) from the ChatCoach panel to GitHub."""
     _resolve_step_context(db, step_id)
     _require_section(section_key)
 
@@ -425,18 +388,21 @@ async def upload_conversation_files(
         if mime_type not in ALLOWED_MIME_TYPES:
             raise HTTPException(status_code=422, detail=f"MIME type '{mime_type}' is not allowed.")
 
-        stored_name = f"{uuid.uuid4().hex}{ext}"
-        upload_base = Path(request.app.state.uploads_root) / "8d"
-        upload_base.mkdir(parents=True, exist_ok=True)
+        # ── Upload to GitHub ──────────────────────────────────────────────────
+        try:
+            result = await storage.upload(
+                content=content,
+                original_name=original_name,
+                mime_type=mime_type,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"GitHub upload failed: {exc}")
 
-        dest = upload_base / stored_name
-        dest.write_bytes(content)
-
-
+        # ── Persist to DB ─────────────────────────────────────────────────────
         db_file = FileModel(
             purpose      ="evidence",
             original_name=original_name,
-            stored_path  =stored_name,
+            stored_path  =result["stored_name"],
             size_bytes   =len(content),
             mime_type    =mime_type,
             uploaded_by  =SYSTEM_USER_ID,
@@ -449,8 +415,8 @@ async def upload_conversation_files(
         step_file = StepFile(
             report_step_id=step_id,
             file_id       =db_file.id,
-            action_type   =resolved_action_type,   # ← new
-            action_index  =resolved_action_index,  # ← new
+            action_type   =resolved_action_type,
+            action_index  =resolved_action_index,
             created_at    =datetime.now(timezone.utc),
         )
         db.add(step_file)

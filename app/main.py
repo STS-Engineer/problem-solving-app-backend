@@ -17,8 +17,6 @@ from sqlalchemy import text
 from app.api.router import api_router
 from app.db.session import AsyncSessionLocal, async_engine
 from app.services.scheduler import is_scheduler_running, start_scheduler, stop_scheduler
-from fastapi.staticfiles import StaticFiles
-from pathlib import Path
 
 def _configure_logging() -> None:
     # 1. Define the format
@@ -91,14 +89,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("AVOCarbon API stopped.")
 
 
-HOME_DIR = Path(".")
-UPLOADS_ROOT = HOME_DIR / "site" / "uploads"
-UPLOADS_ROOT.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="AVOCarbon Complaints / 8D Report API", lifespan=lifespan)
 
-app.state.uploads_root = UPLOADS_ROOT
 
-app.mount("/uploads", StaticFiles(directory=str(UPLOADS_ROOT)), name="uploads")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
