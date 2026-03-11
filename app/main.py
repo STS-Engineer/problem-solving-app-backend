@@ -102,20 +102,6 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api/v1")
 
-@app.post("/debug/trigger-escalation", tags=["debug"])
-def trigger_escalation_now():
-    from app.db.session import SessionLocal
-    from app.services.escalation_service import check_and_escalate_all
-    db = SessionLocal()
-    try:
-        check_and_escalate_all(db)
-        db.commit()
-        return {"status": "done"}
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "detail": str(e)}
-    finally:
-        db.close()
 # ── Health endpoints ──────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["ops"])
