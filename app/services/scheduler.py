@@ -21,7 +21,7 @@ load_dotenv()
 TEST_MODE = os.getenv("TEST_ESCALATION", "false").lower() == "true"
 DEV_MODE  = os.getenv("DEV_MODE", "false").lower() == "true"
 
-CHECK_INTERVAL_MINUTES = 3 if TEST_MODE else 10
+CHECK_INTERVAL_MINUTES = 3 if TEST_MODE else 30
 RETRY_INTERVAL_MINUTES = 10
 
 LOCK_ID_ESCALATION = 8_001
@@ -129,14 +129,7 @@ def start_scheduler() -> None:
         name="Email Outbox Retry",
         replace_existing=True,
     )
-    # Add this inside start_scheduler()
-    _scheduler.add_job(
-        lambda: logger.info("--- SCHEDULER HEARTBEAT: I AM ALIVE ---"),
-        trigger=IntervalTrigger(seconds=30),
-        id="heartbeat",
-        name="Log Heartbeat",
-        replace_existing=True,
-    )
+
     _scheduler.start()
     mode = "TEST" if TEST_MODE else "PRODUCTION"
     dev  = " + DEV_MODE (no advisory lock)" if DEV_MODE else ""
