@@ -860,26 +860,24 @@ class ConversationService:
         complaint = step.report.complaint
         all_sections = get_all_section_keys(step.step_code)
 
-        if not all_sections:
-            step.status = "fulfilled"
-            complaint.status = "closed" if step.step_code == "D8" else step.step_code
-            step.completed_at = datetime.now(timezone.utc)
-            if commit:
-                self.db.commit()
-            else:
-                self.db.flush()
-            return
+        if all_sections:
+            for section_key in all_sections:
+                if section_key == just_completed_section:
+                    continue
+                if not self._is_section_fulfilled(step_id, section_key):
+                    logger.debug("Step %d: section '%s' not yet fulfilled", step_id, section_key)
+                    return
 
-        for section_key in all_sections:
-            if section_key == just_completed_section:
-                continue
-            if not self._is_section_fulfilled(step_id, section_key):
-                logger.debug("Step %d: section '%s' not yet fulfilled", step_id, section_key)
-                return
+        now = datetime.now(timezone.utc)
 
         step.status = "fulfilled"
-        complaint.status = "closed" if step.step_code == "D8" else step.step_code
-        step.completed_at = datetime.now(timezone.utc)
+        step.completed_at = now
+
+        if str(step.step_code).upper() == "D8":
+            complaint.status = "closed"
+            complaint.closed_at = now
+        else:
+            complaint.status = step.step_code
 
         if commit:
             self.db.commit()
