@@ -97,7 +97,9 @@ class ComplaintListItem(BaseModel):
     repetitive_complete_with_number: Optional[str]
     created_at: datetime
     potential_avocarbon_process_linked_to_problem: Optional[str]
-    complaint_description: Optional[str]     
+    complaint_description: Optional[str]  
+    closed_at:Optional[date]
+   
     cqt_email: Optional[str]                 
     quality_manager_email: Optional[str]     
     plant_manager_email: Optional[str]       
