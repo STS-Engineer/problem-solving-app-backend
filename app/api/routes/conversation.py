@@ -50,7 +50,7 @@ ALLOWED_MIME_TYPES = {
     "application/pdf",
 }
 
-_EVIDENCE_SYNC_SECTIONS = {"deviation", "implementation"}
+_EVIDENCE_SYNC_SECTIONS = {"deviation", "implementation","lessons_learned"}
 
 
 def _sha256(data: bytes) -> str:
@@ -145,7 +145,7 @@ VALID_SECTION_KEYS = {
     "root_cause", "corrective_actions",
 }
 
-VALID_ACTION_TYPES = {"occurrence", "detection"}
+VALID_ACTION_TYPES = {"occurrence", "detection", "lesson"}
 
 
 def _require_section(section_key: str) -> None:

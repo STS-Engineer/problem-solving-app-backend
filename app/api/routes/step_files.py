@@ -40,14 +40,29 @@ ALLOWED_MIME_TYPES = {
     "image/jpeg", "image/png", "image/gif",
     "image/webp", "image/bmp", "image/tiff",
     "application/pdf",
+
+    # Excel — browsers/OS send several variants
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # .xlsx
+    "application/vnd.ms-excel",                                           # .xls
+    "application/vnd.ms-office",                                          # .xls (IE/Edge)
+    "application/msexcel",                                                 # .xls (rare)
+    "application/x-msexcel",                                              # .xls (rare)
+    "application/octet-stream",                                           # generic binary (xlsx drag-drop)
+    "text/csv",                                                            # .csv
+    "text/plain",                                                          # .csv (some OSes)
 }
+
 ALLOWED_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".gif",
     ".webp", ".bmp", ".tif", ".tiff",
     ".pdf",
-}
 
-ActionType = Literal["occurrence", "detection"]
+    # Excel
+    ".xlsx",
+    ".xls",
+    ".csv",  # optional
+}
+ActionType = Literal["occurrence", "detection","lesson"]
 
 
 def _sha256(data: bytes) -> str:
@@ -67,6 +82,8 @@ def _file_icon(mime_type: str) -> str:
         return "📄"
     if mime_type.startswith("image/"):
         return "🖼️"
+    if "spreadsheet" in mime_type or mime_type in ("application/vnd.ms-excel", "text/csv"):
+        return "📊"
     return "📎"
 
 
@@ -148,6 +165,20 @@ async def upload_file(
     )
     if mime_type == "image/jpg":
         mime_type = "image/jpeg"
+    if mime_type == "image/jpg":
+        mime_type = "image/jpeg"
+
+    # Normalise ambiguous Excel types — trust the file extension instead
+    if ext in {".xlsx", ".xls", ".csv"} and mime_type in {
+        "application/octet-stream", "text/plain", "application/vnd.ms-office",
+        "application/msexcel", "application/x-msexcel",
+    }:
+        ext_to_mime = {
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".xls":  "application/vnd.ms-excel",
+            ".csv":  "text/csv",
+        }
+        mime_type = ext_to_mime[ext]
     if mime_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(
             status_code=422,
@@ -284,7 +315,6 @@ async def download_file(
     # Images and PDFs open inline in the browser; everything else forces download
     is_previewable = mime_type.startswith("image/") or mime_type == "application/pdf"
     disposition    = "inline" if is_previewable else f'attachment; filename="{original_name}"'
-
     return Response(
         content=content,
         media_type=mime_type,

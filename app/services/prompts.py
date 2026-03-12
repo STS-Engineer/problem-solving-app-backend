@@ -268,9 +268,9 @@ Field rules:
 - BLOCK extraction: no implementation date filled at all, no evidence file per action.
 """,
 
-    "monitoring_checklist": """\
+  "monitoring_checklist": """\
 ════════════════════════════════════════
-SECTION D6 — MONITORING
+SECTION D6 — MONITORING & CHECKLIST
 ════════════════════════════════════════
 Field rules:
 - Interval       : specific period. "A few days" → ask for number of shifts or days.
@@ -279,6 +279,27 @@ Field rules:
 - Auditor        : named person. "The quality manager" → ask for their name.
 - Audit date     : must be after D6 implementation dates.
 - BLOCK extraction: monitoring interval or auditor missing.
+
+CHECKLIST — you must walk the user through each of the following 13 audit questions.
+For each, ask if it was verified in Shift 1, Shift 2, and/or Shift 3 (depending on
+num_shifts). Present them one by one or as a grouped confirmation — do not skip any.
+
+Checklist questions:
+  1.  Have parameters been corrected in safety/working instructions?
+  2.  Do working instructions match with Control Plan and PFMEA?
+  3.  Are the instructions clear?
+  4.  Are critical points clearly described?
+  5.  Does actual process match with the operating instructions?
+  6.  Does actual process match with the expected corrective actions?
+  7.  Are operators aware of the incident?
+  8.  Are operators trained about all process modifications?
+  9.  Has the solution been properly validated on the shop floor?
+  10. Is there a clear visual aid published in a visible spot?
+  11. Is the equipment modified per the corrective actions?
+  12. Is the maintenance record modified?
+  13. Is the set-up instruction modified? Does it match with CP?
+
+After completing the checklist, ask for the auditor name, audit date, and number of shifts.
 """,
 
     "prevention": """\
@@ -530,12 +551,24 @@ RULES:
     "monitoring_interval": "<string>",
     "pieces_produced":     <number|null>,
     "rejection_rate":      <number|null>,
+    },
+  "checklist": [
+    {
+      "question": "<exact question text>",
+      "checked":  <true|false>,
+      "shift_1":  <true|false>,
+      "shift_2":  <true|false>,
+      "shift_3":  <true|false>
+    }
+  ],
   },
   "audited_by":  "<string>",
   "audit_date":  "<YYYY-MM-DD>",
   "num_shifts":  <1|2|3>
 }
-REQUIRED: monitoring_interval, audited_by.""",
+REQUIRED: monitoring_interval, audited_by.
+checklist must contain all 13 items when extracted.
+""",
 
     "prevention": """{
   "recurrence_risks": [

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -37,7 +38,7 @@ from app.services.prompts import (
     EXTRACTION_SCHEMA,
     build_already_known_block,
 )
-
+from app.services.step_service import StepService
 logger = logging.getLogger(__name__)
 
 
@@ -239,11 +240,25 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
 
     if section_key == "monitoring_checklist":
         mon = extracted.get("monitoring", {})
-        return (
-            isinstance(mon, dict)
-            and str(mon.get("monitoring_interval", "")).strip()
-            and str(extracted.get("audited_by", "")).strip()
-        )
+        checklist = extracted.get("checklist", [])
+        
+        # Base fields
+        if not (isinstance(mon, dict) and str(mon.get("monitoring_interval", "")).strip()
+                and str(extracted.get("audited_by", "")).strip()):
+            return False
+        
+        # Checklist: at least 50% verified across any shift
+        if checklist:
+            num_shifts = extracted.get("num_shifts", 3)
+            shift_keys = ["shift_1", "shift_2", "shift_3"][:num_shifts]
+            verified = sum(
+                1 for item in checklist
+                if isinstance(item, dict) and any(item.get(k) for k in shift_keys)
+            )
+            if verified < math.ceil(len(checklist) * 0.5):
+                return False
+        
+        return True
 
     if section_key == "prevention":
         risks = extracted.get("recurrence_risks", [])
