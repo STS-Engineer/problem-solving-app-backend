@@ -254,7 +254,7 @@ def build_escalation_email(
             <!-- Notified contacts -->
             <div style="margin-bottom:24px">
               <div style="font-size:10px;font-weight:700;color:#7A8FA0;letter-spacing:0.07em;margin-bottom:10px">
-                PARTIES NOTIFIED AT THIS LEVEL
+                Related Parties to This Complaint
               </div>
               <table cellpadding="0" cellspacing="0" border="0" style="width:100%">
                 {contacts_rows}
