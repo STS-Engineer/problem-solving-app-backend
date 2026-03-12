@@ -846,26 +846,28 @@ class ConversationService:
         logger.info("Saved extracted fields to step %d (keys: %s)", step_id, list(extracted.keys()))
 
     def _maybe_mark_step_fulfilled(
-        self,
-        step_id: int,
-        just_completed_section: str,
-        *,
-        commit: bool = False,
-    ) -> None:
+    self,
+    step_id: int,
+    just_completed_section: str,
+    *,
+    commit: bool = False,
+) -> None:
         from app.models.report_step import ReportStep
         step = self.db.get(ReportStep, step_id)
         if step is None:
             return
 
-        complaint    = step.report.complaint
+        complaint = step.report.complaint
         all_sections = get_all_section_keys(step.step_code)
 
         if not all_sections:
-            step.status       = "fulfilled"
-            complaint.status  = step.step_code
+            step.status = "fulfilled"
+            complaint.status = "closed" if step.step_code == "D8" else step.step_code
             step.completed_at = datetime.now(timezone.utc)
-            if commit: self.db.commit()
-            else:      self.db.flush()
+            if commit:
+                self.db.commit()
+            else:
+                self.db.flush()
             return
 
         for section_key in all_sections:
@@ -875,12 +877,14 @@ class ConversationService:
                 logger.debug("Step %d: section '%s' not yet fulfilled", step_id, section_key)
                 return
 
-        step.status       = "fulfilled"
-        complaint.status  = step.step_code
+        step.status = "fulfilled"
+        complaint.status = "closed" if step.step_code == "D8" else step.step_code
         step.completed_at = datetime.now(timezone.utc)
-        if commit: self.db.commit()
-        else:      self.db.flush()
-        logger.info("Step %d (%s) fulfilled — all sections complete", step_id, step.step_code)
+
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
 
     def _is_section_fulfilled(self, step_id: int, section_key: str) -> bool:
         rows = (
