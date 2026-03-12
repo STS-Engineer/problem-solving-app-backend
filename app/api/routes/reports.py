@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.services.report_export_service import ReportExportService
-from app.services.step_service import StepService
 from app.schemas.report import *
 
 router = APIRouter()
@@ -97,22 +96,34 @@ def get_current_step_by_complaint(
 # so FastAPI does not try to parse "complaint" as an integer.
 
 @router.get("/complaint/{complaint_id}/export")
-def export_by_complaint(
+async def export_by_complaint(
     complaint_id: int,
     db: Session = Depends(get_db),
 ):
-    """
-    Generate and download the filled 8D Excel report for a given complaint.
-    Fetches all D1-D8 step data + photos from GitHub, writes them into the template.
-    """
     from app.models.report import Report
 
     report = db.query(Report).filter(Report.complaint_id == complaint_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="No 8D report found for this complaint")
 
-    return _stream_excel(db, report.id)
+    if not ReportExportService.is_report_ready(report):
+        raise HTTPException(status_code=409, detail="8D report is not ready for export yet.")
 
+    # If already saved to GitHub, redirect to it
+    if report.report_url:
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=report.report_url)
+
+    # First time: generate, save to GitHub, persist URL
+    try:
+        url = await ReportExportService.save_to_github(db, report.id)
+        report.report_url = url
+        db.commit()
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=url)
+    except Exception:
+        # Fallback: stream directly without saving
+        return _stream_excel(db, report.id)
 
 # ── 3. Export by report_id  (direct / admin use) ──────────────────────────────
 
@@ -121,13 +132,60 @@ def export_by_report_id(
     report_id: int,
     db: Session = Depends(get_db),
 ):
-    """Generate and download the filled 8D Excel report for a given report_id."""
-    return _stream_excel(db, report_id)
+    from app.models.report import Report
 
+    report = db.query(Report).filter(Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
 
+    if not ReportExportService.is_report_ready(report):
+        raise HTTPException(
+            status_code=409,
+            detail="8D report is not ready for export yet. Please complete D1 to D8 first.",
+        )
+
+    return _stream_excel(db, report.id)
 # ── shared helper ─────────────────────────────────────────────────────────────
 
+@router.get("/complaint/{complaint_id}/preview")
+def preview_by_complaint(
+    complaint_id: int,
+    db: Session = Depends(get_db),
+):
+    from app.models.report import Report
+
+    report = db.query(Report).filter(Report.complaint_id == complaint_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="No report found")
+
+    steps_data = {}
+    for step in report.steps:
+        steps_data[step.step_code] = {
+            "status": step.status,
+            "data": step.data or {},
+        }
+
+    return {
+        "report_number": report.report_number,
+        "title": report.title,
+        "steps": steps_data,
+    }
+
+
 def _stream_excel(db: Session, report_id: int) -> StreamingResponse:
+    from app.models.report import Report
+    from datetime import datetime, timezone
+
+    report = db.query(Report).filter(Report.id == report_id).first()
+
+    # ── Auto-close complaint on first export ──────────────────────────────
+    if report and report.complaint:
+        complaint = report.complaint
+        if (complaint.status or "").lower() not in ("closed", "resolved"):
+            complaint.status = "closed"
+            complaint.closed_at = datetime.now(timezone.utc)
+            db.commit()
+
     try:
         file_bytes = ReportExportService.generate_excel(db, report_id)
         filename   = ReportExportService.get_filename(db, report_id)

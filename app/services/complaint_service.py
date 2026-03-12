@@ -12,6 +12,7 @@ from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
 # from app.services import webhook_service
 from app.services.auto_extraction import auto_fill_from_complaint
 # from app.services.escalation_service import _SCALE
+from app.services.report_export_service import ReportExportService
 from app.services.utils.report_helpers import generate_report_number, get_8d_steps_definitions
 
 def generate_complaint_number():
@@ -172,19 +173,27 @@ class ComplaintService:
         cqt_email: Optional[str] = None,
     ) -> List[Complaint]:
         query = db.query(Complaint)
-        
+
         if status:
             query = query.filter(Complaint.status == status)
         if product_line:
             query = query.filter(Complaint.product_line == product_line)
         if cqt_email:
-            # Case-insensitive partial match so "alice@" finds "alice@acme.com"
-            query = query.filter(
-                Complaint.cqt_email.ilike(f"%{cqt_email}%")
-            )
-        
-        return query.order_by(Complaint.created_at.desc()).offset(skip).limit(limit).all()
+            query = query.filter(Complaint.cqt_email.ilike(f"%{cqt_email}%"))
 
+        complaints = (
+            query.order_by(Complaint.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
+        for complaint in complaints:
+            export_meta = ReportExportService.get_export_meta_for_complaint(db, complaint.id)
+            setattr(complaint, "has_export_report", export_meta["has_export_report"])
+            setattr(complaint, "export_filename", export_meta["export_filename"])
+
+        return complaints
     @staticmethod
     def update_complaint(
         db: Session, complaint_id: int, payload: ComplaintUpdate

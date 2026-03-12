@@ -27,20 +27,7 @@ class Report(Base):
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=datetime.utcnow)
     submitted_at = Column(DateTime)
     approved_at = Column(DateTime)
-    
-    # OPTIONAL: Add these fields for time tracking (uncomment when ready)
-    # d1_date = Column(DateTime, nullable=True, comment="D1 step completion date")
-    # d3_date = Column(DateTime, nullable=True, comment="D3 step completion date")
-    # d5_date = Column(DateTime, nullable=True, comment="D5 step completion date")
-    # d8_date = Column(DateTime, nullable=True, comment="D8 step completion date")
-    # llc_date = Column(DateTime, nullable=True, comment="Lessons Learned completion date")
-    
-    # OPTIONAL: Add these fields for cost tracking (uncomment when ready)
-    # d13_cost = Column(Numeric(12, 2), nullable=True, comment="Cost from D1 to D3")
-    # d45_cost = Column(Numeric(12, 2), nullable=True, comment="Cost from D4 to D5")
-    # d68_cost = Column(Numeric(12, 2), nullable=True, comment="Cost from D6 to D8")
-    # llc_cost = Column(Numeric(12, 2), nullable=True, comment="Lessons Learned Cost")
-    
+
 
 
     # Relationships
@@ -48,7 +35,7 @@ class Report(Base):
     creator = relationship("User", foreign_keys=[created_by], back_populates="created_reports")
     reviewer = relationship("User", foreign_keys=[reviewed_by], back_populates="reviewed_reports")
     steps = relationship("ReportStep", back_populates="report", cascade="all, delete-orphan")
-    
+    report_url = Column(String(512), nullable=True)
     def __repr__(self):
         return f"<Report(id={self.id}, number='{self.report_number}', status='{self.status}')>"
 

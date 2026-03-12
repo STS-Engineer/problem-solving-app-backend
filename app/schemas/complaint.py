@@ -99,7 +99,10 @@ class ComplaintListItem(BaseModel):
     potential_avocarbon_process_linked_to_problem: Optional[str]
     complaint_description: Optional[str]  
     closed_at:Optional[date]
-   
+
+    has_export_report: bool = False
+    export_filename: Optional[str] = None
+    
     cqt_email: Optional[str]                 
     quality_manager_email: Optional[str]     
     plant_manager_email: Optional[str]       

@@ -32,7 +32,7 @@ _IMAGE_MIMES = {
     "image/jpeg", "image/jpg", "image/png",
     "image/gif",  "image/bmp", "image/tiff",
 }
-
+_STEP_ORDER = ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
 # =============================================================================
 # GENERIC CELL HELPERS
 # =============================================================================
@@ -664,3 +664,54 @@ class ReportExportService:
         name = name.replace(" ", "_").replace("/", "-")
         name = _safe_filename(name)
         return f"8D_{_s(report.report_number)}_{name}.xlsx"
+    
+    @staticmethod
+    def is_report_ready(report: Optional[Report]) -> bool:
+            if not report:
+                return False
+
+            step_map: Dict[str, ReportStep] = {s.step_code: s for s in (report.steps or [])}
+
+            for code in _STEP_ORDER:
+                step = step_map.get(code)
+                if step is None or step.status != "fulfilled":
+                    return False
+
+            return True
+
+    @staticmethod
+    def has_export_for_complaint(db: Session, complaint_id: int) -> bool:
+            report = (
+                db.query(Report)
+                .filter(Report.complaint_id == complaint_id)
+                .first()
+            )
+            return ReportExportService.is_report_ready(report)
+
+    @staticmethod
+    def get_export_meta_for_complaint(db: Session, complaint_id: int) -> Dict[str, Any]:
+            report = (
+                db.query(Report)
+                .filter(Report.complaint_id == complaint_id)
+                .first()
+            )
+
+            if not report:
+                return {
+                    "has_export_report": False,
+                    "export_filename": None,
+                }
+
+            ready = ReportExportService.is_report_ready(report)
+
+            return {
+                "has_export_report": ready,
+                "export_filename": ReportExportService.get_filename(db, report.id) if ready else None,
+            }
+    @staticmethod
+    async def save_to_github(db: Session, report_id: int) -> str:
+        """Generate Excel, push to GitHub reports folder, return URL."""
+        file_bytes = ReportExportService.generate_excel(db, report_id)
+        filename   = ReportExportService.get_filename(db, report_id)
+        result     = await storage.upload_report(file_bytes, filename)
+        return result["url"]

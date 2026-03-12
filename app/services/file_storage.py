@@ -26,6 +26,7 @@ _DEFAULT_OWNER  = "STS-Engineer"
 _DEFAULT_REPO   = "problem-solving-app-backend"
 _DEFAULT_BRANCH = "uploads"
 _DEFAULT_FOLDER = "uploads/8d"
+_DEFAULT_REPORTS_FOLDER = "exports/8d-reports"
 
 
 def _token()  -> str: return os.environ.get("GITHUB_TOKEN",  _DEFAULT_TOKEN).strip()
@@ -33,7 +34,7 @@ def _owner()  -> str: return os.environ.get("GITHUB_OWNER",  _DEFAULT_OWNER).str
 def _repo()   -> str: return os.environ.get("GITHUB_REPO",   _DEFAULT_REPO).strip()
 def _branch() -> str: return os.environ.get("GITHUB_BRANCH", _DEFAULT_BRANCH).strip()
 def _folder() -> str: return os.environ.get("GITHUB_FOLDER", _DEFAULT_FOLDER).strip().rstrip("/")
-
+def _reports_folder() -> str: return os.environ.get("GITHUB_REPORTS_FOLDER", _DEFAULT_REPORTS_FOLDER).strip().rstrip("/")
 
 def _headers() -> dict[str, str]:
     token = _token()
@@ -175,6 +176,29 @@ class FileStorageService:
 
         logger.info("Deleted %s from GitHub repo", stored_name)
 
+    async def upload_report(
+        self,
+        content: bytes,
+        filename: str,
+    ) -> dict[str, str]:
+        _require_env()
+        repo_path = f"{_reports_folder()}/{filename}"
+        encoded   = base64.b64encode(content).decode()
+        api_url   = f"{_GITHUB_API}/repos/{_owner()}/{_repo()}/contents/{repo_path}"
+        payload   = {
+            "message": f"chore: export 8D report {filename}",
+            "content": encoded,
+            "branch":  _branch(),
+        }
+        async with httpx.AsyncClient(headers=_headers(), timeout=60) as client:
+            r = await client.put(api_url, json=payload)
+            r.raise_for_status()
+        return {"stored_name": filename, "url": self.url_for_report(filename)}
 
+    def url_for_report(self, filename: str) -> str:
+        return (
+            f"https://raw.githubusercontent.com"
+            f"/{_owner()}/{_repo()}/{_branch()}/{_reports_folder()}/{filename}"
+        )
 # ── Singleton — import this everywhere ───────────────────────────────────────
 storage = FileStorageService()
