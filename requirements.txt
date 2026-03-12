@@ -13,6 +13,7 @@ tiktoken
 regex
 tqdm
 python-multipart
-
+Pillow
+openpyxl
 apscheduler
 asyncpg
