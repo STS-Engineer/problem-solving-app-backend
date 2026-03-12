@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 _GITHUB_API = "https://api.github.com"
 
 _DEFAULT_TOKEN  = ""
-_DEFAULT_OWNER  = ""
-_DEFAULT_REPO   = ""
+_DEFAULT_OWNER  = "STS-Engineer"
+_DEFAULT_REPO   = "problem-solving-app-backend"
 _DEFAULT_BRANCH = "uploads"
 _DEFAULT_FOLDER = "uploads/8d"
 
