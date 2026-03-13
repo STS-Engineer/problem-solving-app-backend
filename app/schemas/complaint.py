@@ -98,7 +98,7 @@ class ComplaintListItem(BaseModel):
     created_at: datetime
     potential_avocarbon_process_linked_to_problem: Optional[str]
     complaint_description: Optional[str]  
-    closed_at:Optional[date]
+    closed_at: Optional[datetime] 
 
     has_export_report: bool = False
     export_filename: Optional[str] = None
