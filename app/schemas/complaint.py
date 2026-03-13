@@ -102,7 +102,9 @@ class ComplaintListItem(BaseModel):
 
     has_export_report: bool = False
     export_filename: Optional[str] = None
-    
+    current_step_code: Optional[str] = None    
+    all_completed: bool = False
+    has_report: bool = False
     cqt_email: Optional[str]                 
     quality_manager_email: Optional[str]     
     plant_manager_email: Optional[str]       

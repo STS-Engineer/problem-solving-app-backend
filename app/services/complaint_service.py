@@ -2,7 +2,8 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 import random
 import string
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_,select, func, case
+
 from sqlalchemy.orm import Session
 
 from app.models.complaint import Complaint
@@ -11,8 +12,6 @@ from app.models.report_step import ReportStep
 from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
 # from app.services import webhook_service
 from app.services.auto_extraction import auto_fill_from_complaint
-# from app.services.escalation_service import _SCALE
-from app.services.report_export_service import ReportExportService
 from app.services.utils.report_helpers import generate_report_number, get_8d_steps_definitions
 
 def generate_complaint_number():
@@ -49,7 +48,13 @@ PRIORITY_MAPPING = {
     "WR": "medium",
     "Quality Alert": "low",
 }
+_STEP_ORDER = ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
 
+# Postgres CASE WHEN ordering for step codes
+_STEP_PRIORITY = case(
+    *[(ReportStep.step_code == code, i) for i, code in enumerate(_STEP_ORDER)],
+    else_=99
+)
 class ComplaintService:
     @staticmethod
     def create_complaint(
@@ -172,28 +177,93 @@ class ComplaintService:
         product_line: Optional[str] = None,
         cqt_email: Optional[str] = None,
     ) -> List[Complaint]:
-        query = db.query(Complaint)
+        # ── Subquery: first non-fulfilled step code per report ─────────────────
+        # Uses a correlated subquery ordered by D1→D8 priority.
+        # Returns NULL when all steps are fulfilled (= all_completed).
+        first_open_step = (
+            select(ReportStep.step_code)
+            .where(
+                and_(
+                    ReportStep.report_id == Report.id,
+                    ReportStep.status != "fulfilled",
+                )
+            )
+            .order_by(_STEP_PRIORITY)
+            .limit(1)
+            .correlate(Report)
+            .scalar_subquery()
+        )
+
+        # ── Subquery: does this complaint have ALL 8 steps fulfilled? ──────────
+        fulfilled_count = (
+            select(func.count())
+            .where(
+                and_(
+                    ReportStep.report_id == Report.id,
+                    ReportStep.status == "fulfilled",
+                )
+            )
+            .correlate(Report)
+            .scalar_subquery()
+        )
+
+        # ── Main query: complaints LEFT JOIN reports ───────────────────────────
+        q = (
+            db.query(
+                Complaint,
+                Report.id.label("report_id"),
+                Report.report_number.label("report_number"),
+                first_open_step.label("first_open_step"),
+                fulfilled_count.label("fulfilled_count"),
+            )
+            .outerjoin(Report, Report.complaint_id == Complaint.id)
+        )
 
         if status:
-            query = query.filter(Complaint.status == status)
+            q = q.filter(Complaint.status == status)
         if product_line:
-            query = query.filter(Complaint.product_line == product_line)
+            q = q.filter(Complaint.product_line == product_line)
         if cqt_email:
-            query = query.filter(Complaint.cqt_email.ilike(f"%{cqt_email}%"))
+            q = q.filter(Complaint.cqt_email.ilike(f"%{cqt_email}%"))
 
-        complaints = (
-            query.order_by(Complaint.created_at.desc())
+        rows = (
+            q.order_by(Complaint.created_at.desc())
             .offset(skip)
             .limit(limit)
             .all()
         )
 
-        for complaint in complaints:
-            export_meta = ReportExportService.get_export_meta_for_complaint(db, complaint.id)
-            setattr(complaint, "has_export_report", export_meta["has_export_report"])
-            setattr(complaint, "export_filename", export_meta["export_filename"])
+        # ── Build result list ─────────────────────────────────────────────────
+        results = []
+        for complaint, report_id, report_number, first_open, fulfilled in rows:
+            has_report      = report_id is not None
+            all_completed   = has_report and first_open is None and fulfilled == 8
+            has_export      = all_completed
 
-        return complaints
+            # current_step_code logic mirrors your existing get_current_step endpoint
+            if not has_report:
+                current_step_code = (complaint.status or "open").upper()
+            elif all_completed:
+                current_step_code = "D8"
+            else:
+                current_step_code = first_open  # e.g. "D3"
+
+            # export_filename only computed when ready (avoids a query)
+            export_filename = None
+            if has_export and report_number:
+                name = (complaint.complaint_name or "")[:40]
+                name = name.replace(" ", "_").replace("/", "-")
+                export_filename = f"8D_{report_number}_{name}.xlsx"
+
+            # Attach computed attrs so Pydantic's from_attributes picks them up
+            setattr(complaint, "has_export_report",  has_export)
+            setattr(complaint, "export_filename",     export_filename)
+            setattr(complaint, "current_step_code",   current_step_code)
+            setattr(complaint, "all_completed",        all_completed)
+            setattr(complaint, "has_report",           has_report)
+            results.append(complaint)
+
+        return results
     @staticmethod
     def update_complaint(
         db: Session, complaint_id: int, payload: ComplaintUpdate
