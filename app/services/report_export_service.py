@@ -666,18 +666,25 @@ class ReportExportService:
         return f"8D_{_s(report.report_number)}_{name}.xlsx"
     
     @staticmethod
+    # def is_report_ready(report: Optional[Report]) -> bool:
+    #         if not report:
+    #             return False
+
+    #         step_map: Dict[str, ReportStep] = {s.step_code: s for s in (report.steps or [])}
+
+    #         for code in _STEP_ORDER:
+    #             step = step_map.get(code)
+    #             if step is None or step.status != "fulfilled":
+    #                 return False
+
+    #         return True
     def is_report_ready(report: Optional[Report]) -> bool:
-            if not report:
-                return False
-
-            step_map: Dict[str, ReportStep] = {s.step_code: s for s in (report.steps or [])}
-
-            for code in _STEP_ORDER:
-                step = step_map.get(code)
-                if step is None or step.status != "fulfilled":
-                    return False
-
-            return True
+        """
+        A report is exportable as long as it exists.
+        Steps that are not yet fulfilled will simply export as empty/blank
+        sections in the Excel — no hard gate on all-steps-fulfilled.
+        """
+        return report is not None
 
     @staticmethod
     def has_export_for_complaint(db: Session, complaint_id: int) -> bool:

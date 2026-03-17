@@ -13,9 +13,12 @@ from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
 # from app.services import webhook_service
 from app.services.auto_extraction import auto_fill_from_complaint
 from app.services.utils.report_helpers import generate_report_number, get_8d_steps_definitions
+# from app.services.webhook_service import enqueue_webhook
 
 def generate_complaint_number():
-    return "C-" + "".join(random.choices(string.digits, k=5))
+    suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    year = datetime.now().year
+    return f"CMP-{year}-{suffix}"
 
 # ── SLA days per step code ─────────────────────────────────────────────────────
 # Matches the escalation ladder: overdue = now > due_date.
@@ -112,6 +115,8 @@ class ComplaintService:
             db.flush()                                            # ← ADD (get step.id)
             created_steps.append(step)                           # ← ADD
 
+
+        # enqueue_webhook(db, complaint)
         db.commit()
         db.refresh(complaint)
 
@@ -136,25 +141,6 @@ class ComplaintService:
 
         return complaint
         
-        # 4. Send webhook notification (async, non-blocking)
-        # webhook_service.send_webhook_background(
-        #     event_type="complaint.created",
-        #     complaint_data={
-        #         "id": complaint.id,
-        #         "reference_number": complaint.reference_number,
-        #         "complaint_name": complaint.complaint_name,
-        #         "status": complaint.status,
-        #         "severity": complaint.severity,
-        #         "priority": complaint.priority,
-        #         "due_date": complaint.due_date.isoformat() if complaint.due_date else None,
-        #         "created_at": complaint.created_at.isoformat(),
-        #         "updated_at": complaint.updated_at.isoformat(),
-        #         "customer": complaint.customer,
-        #         "product_line": complaint.product_line.value if complaint.product_line else None
-        #     },
-        #     complaint_id=complaint.id,
-        #     db=db
-        # )
     
     @staticmethod
     def get_complaint_by_id(db: Session, complaint_id: int) -> Optional[Complaint]:

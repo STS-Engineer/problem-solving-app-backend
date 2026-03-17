@@ -6,115 +6,36 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.models.complaint import Complaint
+from app.models.report import Report
 from app.services.report_export_service import ReportExportService
 from app.schemas.report import *
 
 router = APIRouter()
 
-# Ordered 8D step codes
-_STEP_ORDER = ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
-
-
-# ── 1. Current step ───────────────────────────────────────────────────────────
-
-@router.get("/complaint/{complaint_id}/current-step")
-def get_current_step_by_complaint(
-    complaint_id: int,
-    db: Session = Depends(get_db),
-):
-    from app.models.complaint import Complaint
-    from app.models.report import Report
-    from app.models.report_step import ReportStep
-
-    report = db.query(Report).filter(Report.complaint_id == complaint_id).first()
-
-    # ── No Report row (legacy complaint) — fall back to complaint.status ──────
-    if not report:
-        complaint = db.query(Complaint).filter(Complaint.id == complaint_id).first()
-        if not complaint:
-            raise HTTPException(status_code=404, detail="Complaint not found")
-        fallback = (complaint.status or "open").upper()
-        return {
-            "report_id":         None,
-            "current_step_code": fallback,
-            "step_code":         fallback,
-            "step_id":           None,
-            "all_completed":     False,
-            "has_report":        False,
-        }
-
-    # ── Load all steps for this report ───────────────────────────────────────
-    all_steps = (
-        db.query(ReportStep)
-        .filter(ReportStep.report_id == report.id)
-        .all()
-    )
-
-    # Build a lookup: step_code → ReportStep
-    step_map = {s.step_code: s for s in all_steps}
-
-    # ── Determine current step by walking the order ───────────────────────────
-    # The current step is the first one that is NOT fulfilled.
-    # If all are fulfilled, the complaint is done (return D8).
-    current_step = None
-    for code in _STEP_ORDER:
-        step = step_map.get(code)
-        if step is None:
-            # Step missing entirely — treat as not started
-            current_step = step
-            break
-        if step.status != "fulfilled":
-            current_step = step
-            break
-
-    if current_step is None:
-        # Every step is fulfilled → all done
-        d8 = step_map.get("D8")
-        step_code = "D8"
-        return {
-            "report_id":         report.id,
-            "current_step_code": step_code,
-            "step_code":         step_code,
-            "step_id":           d8.id if d8 else None,
-            "all_completed":     True,
-            "has_report":        True,
-        }
-
-    step_code = current_step.step_code
-    return {
-        "report_id":         report.id,
-        "current_step_code": step_code,
-        "step_code":         step_code,
-        "step_id":           current_step.id,
-        "all_completed":     False,
-        "has_report":        True,
-    }
-
-
-# ── 2. Export by complaint_id  (called from D8 page) ─────────────────────────
-# NOTE: this route MUST be registered BEFORE /{report_id}/export
-# so FastAPI does not try to parse "complaint" as an integer.
-
-@router.get("/complaint/{complaint_id}/export")
+@router.get("/complaint/{reference_number}/export")
 async def export_by_complaint(
-    complaint_id: int,
+    reference_number: str,         
     db: Session = Depends(get_db),
 ):
-    from app.models.report import Report
+    _, report = _get_report_by_ref(reference_number, db)
 
-    report = db.query(Report).filter(Report.complaint_id == complaint_id).first()
     if not report:
-        raise HTTPException(status_code=404, detail="No 8D report found for this complaint")
+        raise HTTPException(
+            status_code=404,
+            detail="No 8D report found for this complaint"
+        )
 
     if not ReportExportService.is_report_ready(report):
-        raise HTTPException(status_code=409, detail="8D report is not ready for export yet.")
+        raise HTTPException(
+            status_code=409,
+            detail="8D report is not ready for export yet."
+        )
 
-    # If already saved to GitHub, redirect to it
     if report.report_url:
         from fastapi.responses import RedirectResponse
         return RedirectResponse(url=report.report_url)
 
-    # First time: generate, save to GitHub, persist URL
     try:
         url = await ReportExportService.save_to_github(db, report.id)
         report.report_url = url
@@ -122,7 +43,6 @@ async def export_by_complaint(
         from fastapi.responses import RedirectResponse
         return RedirectResponse(url=url)
     except Exception:
-        # Fallback: stream directly without saving
         return _stream_excel(db, report.id)
 
 # ── 3. Export by report_id  (direct / admin use) ──────────────────────────────
@@ -147,30 +67,50 @@ def export_by_report_id(
     return _stream_excel(db, report.id)
 # ── shared helper ─────────────────────────────────────────────────────────────
 
-@router.get("/complaint/{complaint_id}/preview")
+@router.get("/complaint/{reference_number}/preview")
 def preview_by_complaint(
-    complaint_id: int,
+    reference_number: str,
     db: Session = Depends(get_db),
 ):
-    from app.models.report import Report
+    complaint, report = _get_report_by_ref(reference_number, db)
 
-    report = db.query(Report).filter(Report.complaint_id == complaint_id).first()
     if not report:
-        raise HTTPException(status_code=404, detail="No report found")
+        return {
+            "report_number": None,
+            "title": complaint.complaint_name,
+            "complaint_status": complaint.status,
+            "steps": {},
+        }
 
     steps_data = {}
     for step in report.steps:
+        files_by_scope: dict = {}
+        for sf in step.step_files:
+            key = f"{sf.action_type}:{sf.action_index}" if sf.action_type and sf.action_index is not None else "global"
+            files_by_scope.setdefault(key, []).append({
+                "id": sf.id,                           
+                "file_id": sf.file_id,
+                "filename": sf.file.original_name,     
+                "mime_type": sf.file.mime_type,
+                "size_bytes": sf.file.size_bytes,
+                "action_type": sf.action_type,
+                "action_index": sf.action_index,
+                "uploaded_at": sf.created_at.isoformat() if sf.created_at else None,
+            })
+
         steps_data[step.step_code] = {
             "status": step.status,
             "data": step.data or {},
+            "files": files_by_scope,
+            "step_db_id": step.id,                   
         }
 
     return {
         "report_number": report.report_number,
         "title": report.title,
+        "complaint_status": complaint.status,
         "steps": steps_data,
     }
-
 
 def _stream_excel(db: Session, report_id: int) -> StreamingResponse:
     from app.models.report import Report
@@ -199,3 +139,17 @@ def _stream_excel(db: Session, report_id: int) -> StreamingResponse:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+
+def _get_report_by_ref(reference_number: str, db: Session):
+    complaint = (
+        db.query(Complaint)
+        .filter(Complaint.reference_number == reference_number)
+        .first()
+    )
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    report = db.query(Report).filter(Report.complaint_id == complaint.id).first()
+    return complaint, report  # report may be None

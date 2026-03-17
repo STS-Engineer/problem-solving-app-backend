@@ -103,33 +103,23 @@ class _StepContext:
 
 
 def _resolve_step_context(db: Session, step_id: int) -> _StepContext:
-    row = db.execute(
-        sa_text(
-            "SELECT rs.step_code, r.id AS report_id, r.complaint_id, c.cqt_email "
-            "FROM report_steps rs "
-            "JOIN reports r    ON r.id  = rs.report_id "
-            "JOIN complaints c ON c.id  = r.complaint_id "
-            "WHERE rs.id = :step_id"
-        ),
-        {"step_id": step_id},
-    ).fetchone()
+    from app.models.report_step import ReportStep
+    from app.models.report import Report
+    from app.models.complaint import Complaint
 
-    if row is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"Step {step_id} not found. "
-                "Open the step form first to initialise it."
-            ),
-        )
-
-    return _StepContext(
-        complaint_id=int(row.complaint_id),
-        report_id=int(row.report_id),
-        step_code=str(row.step_code),
-        cqt_email=str(row.cqt_email) if row.cqt_email else None,
+    step = (
+        db.query(ReportStep, Report, Complaint)
+        .join(Report, Report.id == ReportStep.report_id)
+        .join(Complaint, Complaint.id == Report.complaint_id)
+        .filter(ReportStep.id == step_id)
+        .first()
     )
-
+    if not step:
+        raise HTTPException(status_code=404, detail=f"Step {step_id} not found")
+    rs, r, c = step
+    return _StepContext(complaint_id=c.id, report_id=r.id,
+                        step_code=rs.step_code, cqt_email=c.cqt_email)
+ 
 
 # ── Guards ────────────────────────────────────────────────────────────────────
 

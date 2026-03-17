@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -61,6 +61,14 @@ def get_complaint(
         raise HTTPException(status_code=404, detail="Complaint not found")
     return complaint
 
+@router.get("/ref/{reference_number}")
+def get_complaint_by_ref(
+    reference_number: str,
+    db: Session = Depends(get_db),
+):
+    complaint=ComplaintService.get_complaint_by_reference(db,reference_number)
+    
+    return complaint
 
 @router.put("/{complaint_id}", response_model=ComplaintRead)
 def update_complaint(

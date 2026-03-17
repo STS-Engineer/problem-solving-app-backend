@@ -33,21 +33,17 @@ class Complaint(Base):
     complaint_description = Column(Text, comment="Form: Complaint description * (max 2000 chars)")
     
     defects = Column(String(255), comment="Defects *")
-    # quality_manager = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), index=True, comment="Form: Quality manager *")
-    
+     
     repetitive_complete_with_number = Column(Text, comment="Form: REPETITIVE number *")
     status = Column(String(50), nullable=False, default='open', index=True, comment="open|in_progress|under_review|resolved|closed|rejected")
     priority = Column(String(20), default='normal', index=True, comment="low|normal|high|urgent")
 
 
     reported_by = Column(Integer, ForeignKey('users.id', ondelete='RESTRICT'), nullable=False, index=True, comment="User who created complaint")
-    # assigned_to = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), index=True, comment="User assigned to handle complaint")
-    # severity = Column(String(20), default='medium', index=True, comment="low|medium|high|critical")
-    
+ 
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
-    # resolved_at = Column(DateTime)
-    
+     
     due_date = Column(DateTime, nullable=True, index=True, comment="Expected resolution date")
     closed_at = Column(DateTime, nullable=True, index=True, comment="When complaint was closed")
     
@@ -59,18 +55,7 @@ class Complaint(Base):
                                      comment="Plant manager email — used for L3/L4 escalation")
     approved_by_email       = Column(String(255), nullable=True,
                                      comment="Email of person who approved/closed the complaint")
-
-    # # ── Reporter (internal user who opened the complaint) ─────────────────────
-    # reported_by         = Column(Integer, ForeignKey("users.id", ondelete="RESTRICT"),
-    #                              nullable=False, index=True)
-
-     # NEW: Webhook and due date tracking
-    # due_date = Column(DateTime, nullable=True, index=True, comment="Expected resolution date")
-    # closed_at = Column(DateTime, nullable=True, index=True, comment="When complaint was closed")
-    # webhook_sent = Column(Boolean, nullable=False, default=False, index=True, comment="Whether webhook notification was sent successfully")
-    # webhook_attempts = Column(Integer, nullable=False, default=0, comment="Number of webhook send attempts")
-    # last_webhook_attempt = Column(DateTime, nullable=True, comment="Timestamp of last webhook attempt")
-    
+ 
 
     # Relationships
     reporter = relationship("User", foreign_keys=[reported_by], back_populates="reported_complaints")

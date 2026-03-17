@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from typing import Dict, Any
 
 from app.api.deps import get_db
+from app.models.complaint import Complaint
 from app.services.step_service import StepService
 from app.schemas.step_data import *
 from app.models.report import Report
@@ -13,16 +14,25 @@ from app.models.report_step import ReportStep
 router = APIRouter()
 
 
-@router.get("/complaint/{complaint_id}/step/{step_code}")
+@router.get("/complaint/{reference_number}/step/{step_code}")
 def get_step_by_complaint_and_code(
-    complaint_id: int,
+    reference_number: str,          # ← was complaint_id: int
     step_code: str,
     db: Session = Depends(get_db),
 ):
     if step_code not in ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]:
         raise HTTPException(status_code=400, detail="Invalid step code")
 
-    report = db.query(Report).filter(Report.complaint_id == complaint_id).first()
+    # First resolve reference_number → complaint → report
+    complaint = db.query(Complaint).filter(
+        Complaint.reference_number == reference_number
+    ).first()
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    report = db.query(Report).filter(
+        Report.complaint_id == complaint.id   # internal id still used for DB joins
+    ).first()
     if not report:
         raise HTTPException(status_code=404, detail="No 8D report found for this complaint")
 
@@ -51,9 +61,18 @@ def list_steps_by_complaint(
     return {"report_id": report.id, "steps": steps}
 
 
-@router.get("/complaint/{complaint_id}/steps/summary")
-def list_steps_summary(complaint_id: int, db: Session = Depends(get_db)):
-    report = db.query(Report).filter(Report.complaint_id == complaint_id).first()
+@router.get("/complaint/{reference_number}/steps/summary")
+def list_steps_summary(reference_number: str, db: Session = Depends(get_db)):
+    # First resolve reference_number → complaint → report
+    complaint = db.query(Complaint).filter(
+        Complaint.reference_number == reference_number
+    ).first()
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    report = db.query(Report).filter(
+        Report.complaint_id == complaint.id
+    ).first()
     if not report:
         raise HTTPException(status_code=404, detail="No 8D report found")
 
@@ -63,9 +82,10 @@ def list_steps_summary(complaint_id: int, db: Session = Depends(get_db)):
         .order_by(ReportStep.step_code)
         .all()
     )
-    return [{"id": s.id, "step_code": s.step_code, "status": s.status} for s in steps]
-
-
+    return {
+      "complaint_status": complaint.status,  
+      "steps": [{"id": s.id, "step_code": s.step_code, "status": s.status} for s in steps]
+    }
 @router.patch("/{step_id}/save")
 def save_step_progress(
     step_id: int,
