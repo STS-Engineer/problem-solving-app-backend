@@ -81,11 +81,49 @@ CONVERSATION BEHAVIOUR
 
 
 # =============================================================================
+# COST COACHING BLOCK
+# Appended to every section's coaching rules.
+# =============================================================================
+
+COST_COACHING_BLOCK = """
+════════════════════════════════════════
+STEP COST
+════════════════════════════════════════
+After the section fields are confirmed, ask once — and only once — about cost:
+
+  "Does this step involve any cost? (e.g. sorting labour, rework, scrap, expediting…)
+   If yes, give me the amount and currency. If not, just say 'no cost'."
+
+Rules:
+- ONE question, asked after the main section data is complete.
+- If cost already appears in [ALREADY KNOWN] for this step → skip entirely.
+- Accept: "no cost" / "zero" / "nothing" → set no_cost = true, amount = null.
+- Accept: any number + any currency (EUR, USD, MAD, TND…).
+- Vague ("a bit", "some") → ask for the actual figure.
+- NEVER ask again if the user already answered in this conversation.
+- Include cost in <extracted_fields> alongside the section fields.
+"""
+
+# Cost fragment appended to every extraction schema
+_COST_SCHEMA_FRAGMENT = """
+  "cost": {
+    "amount":   <number | null>,
+    "currency": "<string — EUR | USD | GBP | MAD | TND | JPY | CNY | …>",
+    "no_cost":  <true | false>
+  }
+COST RULES:
+- no_cost = true  → amount must be null.
+- no_cost = false → amount must be a positive number, currency required.
+- If user never mentioned cost this session → omit the "cost" key entirely
+  (do NOT default to no_cost=true; wait until it is explicitly confirmed).
+"""
+
+
+# =============================================================================
 # SECTION COACHING RULES
 # =============================================================================
 
-SECTION_COACHING_RULES = {
-
+_SECTION_COACHING_RULES_RAW = {
     "team_members": """\
 ════════════════════════════════════════
 SECTION D1 — TEAM
@@ -101,7 +139,6 @@ Validation rules:
 - Re-emit the FULL accumulated member list every time someone is added.
 - BLOCK extraction: fewer than 2 members.
 """,
-
     "five_w_2h": """\
 ════════════════════════════════════════
 SECTION D2 — 5W2H
@@ -120,9 +157,8 @@ Field rules:
 - HOW      : detection method. "Seen" → ask: visual, functional test, disassembly?
 - HOW MANY : number + unit. "A few" → ask for the count.
 - BLOCK extraction: any of the 7 fields vague or missing.
-Don't confirm or extract until all missing  fields are filled.
+Don't confirm or extract until all missing fields are filled.
 """,
-
     "deviation": """\
 ════════════════════════════════════════
 SECTION D2 — DEVIATION
@@ -139,7 +175,6 @@ Field rules:
 - Logic check: observed must explain why the part failed the standard.
 - BLOCK extraction: any of the 3 required fields is vague or missing.
 """,
-
     "is_is_not": """\
 ════════════════════════════════════════
 SECTION D2 — IS / IS NOT
@@ -155,7 +190,6 @@ Field rules:
 - Pattern     : needs a ratio (e.g. 2 out of 50), not "some parts".
 - BLOCK extraction: fewer than 2 factors fully filled.
 """,
-
     "containment": """\
 ════════════════════════════════════════
 SECTION D3 — CONTAINMENT
@@ -171,7 +205,6 @@ Field rules:
 - Quantity: cross-check against D2. Large gap → mention the discrepancy naturally.
 - BLOCK extraction: no containment action AND no alert documented.
 """,
-
     "restart": """\
 ════════════════════════════════════════
 SECTION D3 — PRODUCTION RESTART
@@ -184,7 +217,6 @@ Field rules:
 - Parts must be physically marked to distinguish certified from suspect.
 - BLOCK extraction: restart date, approver, or containment responsible missing.
 """,
-
     "four_m_occurrence": """\
 ════════════════════════════════════════
 SECTION D4 — ROOT CAUSE (OCCURRENCE)
@@ -201,7 +233,6 @@ Field rules:
 - Validation       : concrete evidence required. "We think so" → ask for data or test.
 - BLOCK extraction : selected problem vague, fewer than 3 Whys, root cause or validation missing.
 """,
-
     "four_m_non_detection": """\
 ════════════════════════════════════════
 SECTION D4 — ROOT CAUSE (NON-DETECTION)
@@ -218,7 +249,6 @@ Field rules:
 - Consistency      : if D2 says found by customer → our inspection must explain why it didn't catch it.
 - BLOCK: same criteria as D4 occurrence, plus root cause must clearly be about detection.
 """,
-
     "corrective_occurrence": """\
 ════════════════════════════════════════
 SECTION D5 — CORRECTIVE ACTIONS (OCCURRENCE)
@@ -237,7 +267,6 @@ Field rules:
 - Collect all actions. After each, ask if there are more. Stop when user confirms complete.
 - BLOCK extraction: no complete action (text + responsible + due date).
 """,
-
     "corrective_detection": """\
 ════════════════════════════════════════
 SECTION D5 — CORRECTIVE ACTIONS (NON-DETECTION)
@@ -251,7 +280,6 @@ Field rules:
 - Same validation as corrective_occurrence (specific, named owner, future date).
 - BLOCK extraction: no complete detection action.
 """,
-
     "implementation": """\
 ════════════════════════════════════════
 SECTION D6 — IMPLEMENTATION
@@ -267,8 +295,7 @@ Field rules:
 - Only update actions that exist in D5. Do not invent new ones.
 - BLOCK extraction: no implementation date filled at all, no evidence file per action.
 """,
-
-  "monitoring_checklist": """\
+    "monitoring_checklist": """\
 ════════════════════════════════════════
 SECTION D6 — MONITORING & CHECKLIST
 ════════════════════════════════════════
@@ -301,7 +328,6 @@ Checklist questions:
 
 After completing the checklist, ask for the auditor name, audit date, and number of shifts.
 """,
-
     "prevention": """\
 ════════════════════════════════════════
 SECTION D7 — PREVENTION
@@ -315,7 +341,6 @@ Field rules:
 - If replicated  : confirmation method must be documented.
 - BLOCK extraction: no risk entry with area/line/product AND action taken.
 """,
-
     "knowledge": """\
 ════════════════════════════════════════
 SECTION D7 — KNOWLEDGE BASE
@@ -330,7 +355,6 @@ Field rules:
 - Monitoring    : specific frequency (weekly, monthly, per batch). "Regularly" → ask.
 - BLOCK extraction: no document update OR monitoring entry with enough detail.
 """,
-
     "lessons_learned": """\
 ════════════════════════════════════════
 SECTION D7 — LESSONS LEARNED
@@ -347,7 +371,6 @@ Field rules:
 - Dissemination date   : required.
 - BLOCK extraction: conclusion empty or no dissemination entry with audience + method.
 """,
-
     "closure": """\
 ════════════════════════════════════════
 SECTION D8 — CLOSURE
@@ -367,12 +390,19 @@ Field rules:
 """,
 }
 
+# Build final SECTION_COACHING_RULES — append COST_COACHING_BLOCK to every section
+SECTION_COACHING_RULES = {
+    key: rules + COST_COACHING_BLOCK
+    for key, rules in _SECTION_COACHING_RULES_RAW.items()
+}
+
 
 # =============================================================================
 # EXTRACTION SCHEMAS
+# cost fragment is appended to every schema automatically at the bottom.
 # =============================================================================
 
-EXTRACTION_SCHEMA = {
+_EXTRACTION_SCHEMA_RAW = {
     "team_members": """{
   "team_members": [
     {
@@ -382,8 +412,8 @@ EXTRACTION_SCHEMA = {
     }
   ]
 }
-    RULES: use "department" not "dept"; use "function" not "role"/"job_title".
-    Return ALL members accumulated so far. Min 2 members""",
+RULES: use "department" not "dept"; use "function" not "role"/"job_title".
+Return ALL members accumulated so far. Min 2 members.""",
     "five_w_2h": """{
   "problem_description": "<string — 2-3 sentence executive summary structured as:
     Sentence 1: [Product type] ([product line]) produced at [our plant] for [customer] presents [defect].
@@ -392,7 +422,7 @@ EXTRACTION_SCHEMA = {
   "five_w_2h": {
     "what":     "<[Part] has [defect] at [location on part] — one clear sentence>",
     "where":    "<physical location where defect was detected — customer plant name only if exact stage unknown>",
-    "when":     "<date only: 'Customer complaint: YYYY-MM-DD ",
+    "when":     "<date only: 'Customer complaint: YYYY-MM-DD'>",
     "who":      "<named person or specific role who detected it — empty string if unknown>",
     "why":      "<functional impact and business consequence — one sentence>",
     "how":      "<detection method — empty string if not stated>",
@@ -401,7 +431,6 @@ EXTRACTION_SCHEMA = {
 }
 ALL 7 five_w_2h sub-fields + problem_description REQUIRED before extracting.
 NEVER write placeholder sentences like 'not specified' or 'to be confirmed' — use empty string.""",
-
     "deviation": """{
   "standard_applicable": "<standard name / WI code — empty string if unknown>",
   "expected_situation":  "<measurable specification the part/process should meet>",
@@ -409,7 +438,6 @@ NEVER write placeholder sentences like 'not specified' or 'to be confirmed' — 
   "evidence_documents":  "<filenames comma-separated, or empty string>"
 }
 standard_applicable, expected_situation, observed_situation are REQUIRED.""",
-
     "is_is_not": """{
   "is_is_not_factors": [
     {"factor": "Product", "is_problem": "<string>", "is_not_problem": "<string>"},
@@ -418,8 +446,7 @@ standard_applicable, expected_situation, observed_situation are REQUIRED.""",
     {"factor": "Pattern", "is_problem": "<string>", "is_not_problem": "<string>"}
   ]
 }
-At least 2 of 4 factors must have both is_problem and is_not_problem filled(related to the problem) """,
-
+At least 2 of 4 factors must have both is_problem and is_not_problem filled.""",
     "containment": """{
   "defected_part_status": {
     "returned":          <true|false>,
@@ -449,7 +476,6 @@ At least 2 of 4 factors must have both is_problem and is_not_problem filled(rela
 }
 REQUIRED: at least one defected_part_status true OR one suspected_parts_status
 row with actions filled, AND at least one alert_communicated_to true or alert_number filled.""",
-
     "restart": """{
   "restart_production": {
     "when":                "<YYYY-MM-DD>",
@@ -461,7 +487,6 @@ row with actions filled, AND at least one alert_communicated_to true or alert_nu
   "containment_responsible": "<string>"
 }
 REQUIRED: when, approved_by, containment_responsible.""",
-
     "four_m_occurrence": """{
   "four_m_occurrence": {
     "row_1": {"material":"<>","method":"<>","machine":"<>","manpower":"<>","environment":"<>"},
@@ -482,7 +507,6 @@ REQUIRED: when, approved_by, containment_responsible.""",
   }
 }
 REQUIRED: selected_problem, root_cause, validation_method, at least 2 why answers.""",
-
     "four_m_non_detection": """{
   "four_m_non_detection": {
     "row_1": {"material":"<>","method":"<>","machine":"<>","manpower":"<>","environment":"<>"},
@@ -503,21 +527,18 @@ REQUIRED: selected_problem, root_cause, validation_method, at least 2 why answer
   }
 }
 REQUIRED: selected_problem, root_cause, validation_method, at least 2 why answers.""",
-
     "corrective_occurrence": """{
   "corrective_actions_occurrence": [
     {"action":"<>","responsible":"<>","due_date":"<YYYY-MM-DD>"}
   ]
 }
 REQUIRED: at least 1 action with action, responsible, due_date.""",
-
     "corrective_detection": """{
   "corrective_actions_detection": [
     {"action":"<>","responsible":"<>","due_date":"<YYYY-MM-DD>"}
   ]
 }
 REQUIRED: at least 1 action with action, responsible, due_date.""",
-
     "implementation": """{
   "corrective_actions_occurrence": [
     {
@@ -525,7 +546,7 @@ REQUIRED: at least 1 action with action, responsible, due_date.""",
       "responsible":  "<string — carry over from D5>",
       "due_date":     "<string — carry over from D5>",
       "imp_date":     "<string — actual implementation date YYYY-MM-DD>",
-      "evidence":     "< filename from ATTACHED EVIDENCE FILES labelled [occurrence #N], or empty>"
+      "evidence":     "<filename from ATTACHED EVIDENCE FILES labelled [occurrence #N], or empty>"
     }
   ],
   "corrective_actions_detection": [
@@ -540,18 +561,14 @@ REQUIRED: at least 1 action with action, responsible, due_date.""",
 }
 RULES:
 - Match files to actions using the [occurrence #N] / [detection #N] label in the file list.
-  Example: if you see "[occurrence #1] photo.jpg" in the file list, set evidence for
-  corrective_actions_occurrence[0] (index 0 = #1) to "photo.jpg".
 - Do NOT invent action descriptions — only add imp_date and evidence for confirmed actions.
-- REQUIRED: at least 1 action in either list must have imp_date filled.
-""",
-
+- REQUIRED: at least 1 action in either list must have imp_date filled.""",
     "monitoring_checklist": """{
   "monitoring": {
     "monitoring_interval": "<string>",
     "pieces_produced":     <number|null>,
-    "rejection_rate":      <number|null>,
-    },
+    "rejection_rate":      <number|null>
+  },
   "checklist": [
     {
       "question": "<exact question text>",
@@ -561,15 +578,12 @@ RULES:
       "shift_3":  <true|false>
     }
   ],
-  },
   "audited_by":  "<string>",
   "audit_date":  "<YYYY-MM-DD>",
   "num_shifts":  <1|2|3>
 }
 REQUIRED: monitoring_interval, audited_by.
-checklist must contain all 13 items when extracted.
-""",
-
+checklist must contain all 13 items when extracted.""",
     "prevention": """{
   "recurrence_risks": [
     {"area_line_product":"<>","similar_risk_present":"<yes|no|unknown>","action_taken":"<>"}
@@ -579,7 +593,6 @@ checklist must contain all 13 items when extracted.
   ]
 }
 REQUIRED: at least 1 recurrence_risks with area_line_product and action_taken.""",
-
     "knowledge": """{
   "knowledge_base_updates": [
     {"document_type":"<Control Plan|PFMEA|WI|…>","topic_reference":"<>","owner":"<>","location_link":"<>"}
@@ -590,7 +603,6 @@ REQUIRED: at least 1 recurrence_risks with area_line_product and action_taken.""
 }
 REQUIRED: at least 1 knowledge_base_updates entry with document_type,
 OR at least 1 long_term_monitoring entry with checkpoint_type.""",
-
     "lessons_learned": """{
   "lesson_disseminations": [
     {"audience_team":"<>","method":"<>","date":"<YYYY-MM-DD>","owner":"<>","evidence":"<>"}
@@ -598,7 +610,6 @@ OR at least 1 long_term_monitoring entry with checkpoint_type.""",
   "ll_conclusion": "<string — minimum 2 sentences: what happened, root cause, action taken, lesson>"
 }
 REQUIRED: ll_conclusion, at least 1 dissemination with audience_team.""",
-
     "closure": """{
   "closure_statement": "<string — minimum 200 characters covering all 4 criteria:
     1. customer notified and satisfied
@@ -616,49 +627,95 @@ REQUIRED: closure_statement ≥200 chars, closed_by, closure_date.
 NEVER invent signatures.""",
 }
 
+# Build final EXTRACTION_SCHEMA — append cost fragment to every schema
+EXTRACTION_SCHEMA = {
+    key: schema + "\n" + _COST_SCHEMA_FRAGMENT
+    for key, schema in _EXTRACTION_SCHEMA_RAW.items()
+}
+
 
 # =============================================================================
 # ALREADY-KNOWN BLOCK BUILDER
 # =============================================================================
-# This is the critical piece that prevents repetition.
-# It builds a structured, concise summary of what is already confirmed,
-# injected at the TOP of every system prompt — before coaching rules.
 
-# Maps section_key → which data keys are "already known" for that section
 _SECTION_KNOWN_KEYS = {
-    "team_members":          [],
-    "five_w_2h":             ["problem_description", "five_w_2h"],
-    "deviation":             ["standard_applicable", "expected_situation", "observed_situation","five_w_2h"],
-    "is_is_not":             ["is_is_not_factors", "five_w_2h"],
-    "containment":           ["defected_part_status", "suspected_parts_status", "five_w_2h"],
-    "restart":               ["defected_part_status", "suspected_parts_status,five_w_2h"],
-    "four_m_occurrence":     ["five_w_2h", "root_cause_occurrence,"],
-    "four_m_non_detection":  ["five_w_2h", "root_cause_non_detection"],
-    "corrective_occurrence": ["five_w_2h","root_cause_occurrence", "corrective_actions_occurrence"],
-    "corrective_detection":  ["five_w_2h","root_cause_non_detection", "corrective_actions_detection"],
-    "implementation":        ["corrective_actions_occurrence", "corrective_actions_detection"],
-    "monitoring_checklist":  ["corrective_actions_occurrence", "corrective_actions_detection"],
-    "prevention":            ["root_cause_occurrence", "corrective_actions_occurrence"],
-    "knowledge":             ["root_cause_occurrence", "corrective_actions_occurrence", "corrective_actions_detection"],
-    "lessons_learned":       ["root_cause_occurrence", "root_cause_non_detection", "corrective_actions_occurrence"],
-    "closure":               ["root_cause_occurrence", "corrective_actions_occurrence", "corrective_actions_detection"],
+    "team_members": ["cost"],
+    "five_w_2h": ["problem_description", "five_w_2h", "cost"],
+    "deviation": [
+        "standard_applicable",
+        "expected_situation",
+        "observed_situation",
+        "five_w_2h",
+        "cost",
+    ],
+    "is_is_not": ["is_is_not_factors", "five_w_2h", "cost"],
+    "containment": [
+        "defected_part_status",
+        "suspected_parts_status",
+        "five_w_2h",
+        "cost",
+    ],
+    "restart": ["defected_part_status", "suspected_parts_status", "five_w_2h", "cost"],
+    "four_m_occurrence": ["five_w_2h", "root_cause_occurrence", "cost"],
+    "four_m_non_detection": ["five_w_2h", "root_cause_non_detection", "cost"],
+    "corrective_occurrence": [
+        "five_w_2h",
+        "root_cause_occurrence",
+        "corrective_actions_occurrence",
+        "cost",
+    ],
+    "corrective_detection": [
+        "five_w_2h",
+        "root_cause_non_detection",
+        "corrective_actions_detection",
+        "cost",
+    ],
+    "implementation": [
+        "corrective_actions_occurrence",
+        "corrective_actions_detection",
+        "cost",
+    ],
+    "monitoring_checklist": [
+        "corrective_actions_occurrence",
+        "corrective_actions_detection",
+        "cost",
+    ],
+    "prevention": ["root_cause_occurrence", "corrective_actions_occurrence", "cost"],
+    "knowledge": [
+        "root_cause_occurrence",
+        "corrective_actions_occurrence",
+        "corrective_actions_detection",
+        "cost",
+    ],
+    "lessons_learned": [
+        "root_cause_occurrence",
+        "root_cause_non_detection",
+        "corrective_actions_occurrence",
+        "cost",
+    ],
+    "closure": [
+        "root_cause_occurrence",
+        "corrective_actions_occurrence",
+        "corrective_actions_detection",
+        "cost",
+    ],
 }
 
-# Human-readable labels for data keys
 _KEY_LABELS = {
-    "problem_description":           "Problem description",
-    "five_w_2h":                     "5W2H",
-    "standard_applicable":           "Applicable standard",
-    "expected_situation":            "Expected situation",
-    "observed_situation":            "Observed situation",
-    "is_is_not_factors":             "IS / IS NOT factors",
-    "defected_part_status":          "Defected part status",
-    "suspected_parts_status":        "Suspected parts",
-    "root_cause_occurrence":         "Root cause (occurrence)",
-    "root_cause_non_detection":      "Root cause (non-detection)",
+    "problem_description": "Problem description",
+    "five_w_2h": "5W2H",
+    "standard_applicable": "Applicable standard",
+    "expected_situation": "Expected situation",
+    "observed_situation": "Observed situation",
+    "is_is_not_factors": "IS / IS NOT factors",
+    "defected_part_status": "Defected part status",
+    "suspected_parts_status": "Suspected parts",
+    "root_cause_occurrence": "Root cause (occurrence)",
+    "root_cause_non_detection": "Root cause (non-detection)",
     "corrective_actions_occurrence": "Corrective actions (occurrence)",
-    "corrective_actions_detection":  "Corrective actions (detection)",
-    "team_members":                  "Team members",
+    "corrective_actions_detection": "Corrective actions (detection)",
+    "team_members": "Team members",
+    "cost": "Step cost",  # ← NEW
 }
 
 
@@ -667,47 +724,36 @@ def build_already_known_block(
     all_step_data: dict,
     complaint_context: dict | None,
 ) -> str:
-    """
-    Build a structured [ALREADY KNOWN] block injected at the top of the
-    system prompt. This is the primary mechanism preventing the AI from
-    re-asking for information already confirmed.
-
-    Structure:
-      [COMPLAINT — read before entering this section]
-      [ALREADY KNOWN — confirmed data from prior steps]
-      [THIS SECTION — what still needs to be filled]
-    """
     lines = []
 
-    # ── 1. Complaint context (always shown, concise) ──────────────────────────
+    # ── 1. Complaint context ───────────────────────────────────────────────────
     if complaint_context:
         lines.append("════════════════════════════════════════")
         lines.append("[COMPLAINT — already read, do not re-ask any of this]")
         lines.append("════════════════════════════════════════")
-
         field_map = [
-            ("Complaint ref",   "reference_number"),
-            ("Title",           "complaint_name"),
-            ("Description",     "complaint_description"),
-            ("Defect type",     "defects"),
-            ("Customer",        "customer"),
-            ("Customer plant",  "customer_plant_name"),
-            ("Our plant",       "plant"),
-            ("Product line",    "product_line"),
-            ("Product type",    "avocarbon_product_type"),
-            ("Application",     "concerned_application"),
-            ("Process",         "potential_avocarbon_process_linked_to_problem"),
-            ("Quality type",    "quality_issue_warranty"),
-            ("Priority",        "priority"),
-            ("Customer date",   "customer_complaint_date"),
-            ("Opening date",    "complaint_opening_date"),
+            ("Complaint ref", "reference_number"),
+            ("Title", "complaint_name"),
+            ("Description", "complaint_description"),
+            ("Defect type", "defects"),
+            ("Customer", "customer"),
+            ("Customer plant", "customer_plant_name"),
+            ("Our plant", "plant"),
+            ("Product line", "product_line"),
+            ("Product type", "avocarbon_product_type"),
+            ("Application", "concerned_application"),
+            ("Process", "potential_avocarbon_process_linked_to_problem"),
+            ("Quality type", "quality_issue_warranty"),
+            ("Priority", "priority"),
+            ("Customer date", "customer_complaint_date"),
+            ("Opening date", "complaint_opening_date"),
         ]
         for label, key in field_map:
             val = complaint_context.get(key, "")
             if val:
                 lines.append(f"  {label:<18}: {val}")
 
-    # ── 2. Prior step data (only keys relevant to this section) ───────────────
+    # ── 2. Prior confirmed data ────────────────────────────────────────────────
     relevant_keys = _SECTION_KNOWN_KEYS.get(section_key, [])
     confirmed_items = []
 
@@ -720,7 +766,11 @@ def build_already_known_block(
 
         if key == "five_w_2h" and isinstance(val, dict):
             filled = {k: v for k, v in val.items() if v}
-            missing = [k for k in ("what", "where", "when", "who", "why", "how", "how_many") if not val.get(k)]
+            missing = [
+                k
+                for k in ("what", "where", "when", "who", "why", "how", "how_many")
+                if not val.get(k)
+            ]
             if filled:
                 confirmed_items.append(f"  {label}:")
                 for k, v in filled.items():
@@ -729,29 +779,62 @@ def build_already_known_block(
                 confirmed_items.append(f"    ✗ Still missing: {', '.join(missing)}")
 
         elif key == "is_is_not_factors" and isinstance(val, list):
-            filled = [f for f in val if isinstance(f, dict) and f.get("is_problem") and f.get("is_not_problem")]
-            missing = [f["factor"] for f in val if isinstance(f, dict) and not (f.get("is_problem") and f.get("is_not_problem"))]
+            filled = [
+                f
+                for f in val
+                if isinstance(f, dict)
+                and f.get("is_problem")
+                and f.get("is_not_problem")
+            ]
+            missing = [
+                f["factor"]
+                for f in val
+                if isinstance(f, dict)
+                and not (f.get("is_problem") and f.get("is_not_problem"))
+            ]
             if filled:
-                confirmed_items.append(f"  {label}: {[f.get('factor') for f in filled]} filled")
+                confirmed_items.append(
+                    f"  {label}: {[f.get('factor') for f in filled]} filled"
+                )
             if missing:
                 confirmed_items.append(f"    ✗ Still missing: {missing}")
 
         elif key == "team_members" and isinstance(val, list):
             confirmed_items.append(f"  {label}: {len(val)} member(s) recorded")
 
-        elif key in ("corrective_actions_occurrence", "corrective_actions_detection") and isinstance(val, list):
+        elif key in (
+            "corrective_actions_occurrence",
+            "corrective_actions_detection",
+        ) and isinstance(val, list):
             confirmed_items.append(f"  {label}: {len(val)} action(s) planned")
             for i, a in enumerate(val, 1):
                 if isinstance(a, dict):
-                    confirmed_items.append(f"    {i}. {a.get('action','?')} — {a.get('responsible','?')} by {a.get('due_date','?')}")
+                    confirmed_items.append(
+                        f"    {i}. {a.get('action','?')} — {a.get('responsible','?')} by {a.get('due_date','?')}"
+                    )
 
-        elif key in ("root_cause_occurrence", "root_cause_non_detection") and isinstance(val, dict):
+        elif key in (
+            "root_cause_occurrence",
+            "root_cause_non_detection",
+        ) and isinstance(val, dict):
             rc = val.get("root_cause", "")
             vm = val.get("validation_method", "")
             if rc:
                 confirmed_items.append(f"  {label}: {rc}")
             if vm:
                 confirmed_items.append(f"    Validation: {vm}")
+
+        # ── cost handler ───────────────────────────────────────────────────────
+        elif key == "cost" and isinstance(val, dict):
+            if val.get("no_cost"):
+                confirmed_items.append(
+                    f"  {label}: No cost for this step — do not ask again."
+                )
+            elif val.get("amount") is not None:
+                confirmed_items.append(
+                    f"  {label}: {val['amount']} {val.get('currency', 'EUR')} — do not ask again."
+                )
+            # if neither flag is set, cost hasn't been confirmed yet → don't show
 
         elif isinstance(val, str) and val:
             confirmed_items.append(f"  {label}: {val}")
@@ -766,7 +849,6 @@ def build_already_known_block(
         lines.append("════════════════════════════════════════")
         lines.extend(confirmed_items)
 
-    # ── 3. What this section needs to fill ────────────────────────────────────
     lines.append("")
     lines.append(f"[CURRENT SECTION: {section_key}]")
 

@@ -17,7 +17,7 @@ from typing import Dict, List
 # ---------------------------------------------------------------------------
 # Type alias
 # ---------------------------------------------------------------------------
-SectionDef = Dict[str, List[str]]   # section_key → list of data fields
+SectionDef = Dict[str, List[str]]  # section_key → list of data fields
 
 
 # ---------------------------------------------------------------------------
@@ -43,13 +43,13 @@ D2_SECTIONS: SectionDef = {
 # D3 — Interim Containment
 # ---------------------------------------------------------------------------
 D3_SECTIONS: SectionDef = {
-    "containment":  [                          # ← merged section 1+2
+    "containment": [  # ← merged section 1+2
         "defected_part_status",
         "suspected_parts_status",
         "alert_communicated_to",
         "alert_number",
     ],
-    "restart":      [
+    "restart": [
         "restart_production",
         "containment_responsible",
     ],
@@ -94,7 +94,7 @@ D6_SECTIONS: SectionDef = {
     "implementation": [
         "corrective_actions_occurrence",
         "corrective_actions_detection",
-        "evidence_documents",          # ← files uploaded via UI or chat
+        "evidence_documents",  # ← files uploaded via UI or chat
     ],
     "monitoring_checklist": [
         "monitoring",
