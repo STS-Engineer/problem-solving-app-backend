@@ -18,25 +18,20 @@ from sqlalchemy import text
 from app.api.router import api_router
 from app.db.session import AsyncSessionLocal, async_engine
 from app.services.scheduler import is_scheduler_running, start_scheduler, stop_scheduler
-<<<<<<< Updated upstream
-=======
 
+ 
 import logging
 from contextlib import asynccontextmanager
-
+ 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
-
+ 
 from app.core.config import get_webhook_settings
-from app.services.webhook_service import (
-    prune_old_jobs,
-    recover_locked_jobs,
-    run_one_poll,
-)
+from app.services.webhook_service import prune_old_jobs, recover_locked_jobs, run_one_poll
+
+
 
 # ── Logging ───────────────────────────────────────────────────────────────────
->>>>>>> Stashed changes
-
 
 def _configure_logging() -> None:
     # 1. Define the format
@@ -88,47 +83,20 @@ origins = [
 if extra := os.getenv("FRONTEND_URL"):
     origins.append(extra)
 
-<<<<<<< Updated upstream
-=======
-
-# ── KPI report wrapper (sync, for APScheduler) ────────────────────────────────
-
-
-def _run_monthly_kpi_reports() -> None:
-    """
-    Thin wrapper so APScheduler can call the async-compatible DB session pattern.
-    Uses the *sync* SessionLocal (same pattern as escalation_service jobs).
-    """
-    from app.db.session import SessionLocal  # noqa – lazy import avoids circular
-    from app.services.kpi_report.kpi_email_service import (
-        send_monthly_kpi_reports,
-    )  # noqa
-
-    db = SessionLocal()
-    try:
-        send_monthly_kpi_reports(db)
-        db.commit()
-    except Exception:
-        logger.exception("Monthly KPI report job failed unexpectedly")
-        db.rollback()
-    finally:
-        db.close()
-
-
-# ── Lifespan ──────────────────────────────────────────────────────────────────
->>>>>>> Stashed changes
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-<<<<<<< Updated upstream
     logger.info("Starting AVOCarbon API...")
 
 =======
-    logger.info("Starting AVOCarbon Complaints API...")
+# ── Lifespan ──────────────────────────────────────────────────────────────────
 
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    logger.info("Starting AVOCarbon Complaints API...")
+ 
     # Verify DB is reachable before accepting traffic
->>>>>>> Stashed changes
     try:
         async with AsyncSessionLocal() as db:
             await db.execute(text("SELECT 1"))
@@ -136,20 +104,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.critical("Cannot connect to database at startup: %s", exc)
         raise
-
+ 
     start_scheduler()
-<<<<<<< Updated upstream
-=======
-    cfg = get_webhook_settings()
-
-    scheduler = BackgroundScheduler(
-        job_defaults={
-            "coalesce": True,  # skip missed runs, never stack
-            "max_instances": 1,  # one instance of each job per process
-            "misfire_grace_time": 60,
-        }
-    )
-
     # ── Job 1: delivery worker ────────────────────────────────────────────────
     # Picks up one pending WebhookJob and delivers it.
     # 120 s is a safe default for your complaint volume.
@@ -214,9 +170,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     for job in scheduler.get_jobs():
         logger.info("  ↳ %-40s next run: %s", job.name, job.next_run_time)
 
->>>>>>> Stashed changes
+ 
+    scheduler.start()
+    logger.info(
+        "Scheduler started — jobs: poll=%ds, recovery=900s, prune=daily@03:00 UTC | "
+        "targets=%d",
+        cfg.webhook_poll_interval,
+        len(cfg.target_urls),
+    )
     yield
-
+    # ── Graceful shutdown ─────────────────────────────────────────────────────
+    logger.info("Shutting down scheduler...")
+    scheduler.shutdown(wait=True)
     stop_scheduler()
     await async_engine.dispose()
     logger.info("AVOCarbon API stopped.")
@@ -247,11 +212,14 @@ async def health() -> dict:
 @app.get("/health/ready", tags=["ops"])
 async def readiness() -> JSONResponse:
     """
-    Readiness probe — checks DB and scheduler.
-    Returns 503 if not ready to serve requests.
+    Readiness probe — checks DB connectivity.
+    Returns 503 if the app is not ready to serve requests.
+    Note: scheduler health is not checked here because APScheduler runs
+    in a background thread and a scheduler failure should not take the
+    entire app offline — the webhook delivery is best-effort.
     """
     checks: dict[str, str] = {}
-
+ 
     try:
         async with AsyncSessionLocal() as db:
             await db.execute(text("SELECT 1"))
@@ -259,17 +227,13 @@ async def readiness() -> JSONResponse:
     except Exception as exc:
         checks["db"] = f"error: {exc}"
 
-<<<<<<< Updated upstream
     checks["scheduler"] = "ok" if is_scheduler_running() else "stopped"
 
-=======
->>>>>>> Stashed changes
+
     overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
     return JSONResponse(
         content={"status": overall, "checks": checks},
         status_code=200 if overall == "ok" else 503,
     )
-<<<<<<< Updated upstream
 
-=======
->>>>>>> Stashed changes
+
