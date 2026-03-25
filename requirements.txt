@@ -20,6 +20,3 @@ asyncpg
 matplotlib
 reportlab
 numpy
-
-black
-flake8
