@@ -13,7 +13,7 @@ from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
 # from app.services import webhook_service
 from app.services.auto_extraction import auto_fill_from_complaint
 from app.services.utils.report_helpers import generate_report_number, get_8d_steps_definitions
-# from app.services.webhook_service import enqueue_webhook
+# from app.services.webhook_service import enqueue_complaint_created,enqueue_type_updated
 
 def generate_complaint_number():
     suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
@@ -116,7 +116,7 @@ class ComplaintService:
             created_steps.append(step)                           # ← ADD
 
 
-        # enqueue_webhook(db, complaint)
+        # enqueue_complaint_created
         db.commit()
         db.refresh(complaint)
 
@@ -125,8 +125,8 @@ class ComplaintService:
         # Runs AFTER commit so all step IDs exist in the DB.
         # Non-fatal: a failure here never rolls back the complaint.
         try:
-            auto_fill_from_complaint(db, complaint, created_steps)  # ← ADD
-            db.commit()                                              # ← ADD
+            auto_fill_from_complaint(db, complaint, created_steps)  
+            db.commit()                                            
         except Exception as exc:
             import logging as _log
             _log.getLogger(__name__).warning(
@@ -257,7 +257,7 @@ class ComplaintService:
         complaint = ComplaintService.get_complaint_by_id(db, complaint_id)
         if not complaint:
             return None
-
+        old_type=complaint.quality_issue_warranty
         data = payload.model_dump(exclude_unset=True)
 
         #Track if status changed to closed
@@ -272,8 +272,13 @@ class ComplaintService:
         db.add(complaint)
         db.commit()
         db.refresh(complaint)
+        new_type=payload.quality_issue_warranty
+        #if old_type != new_type:
+            #enqueue_type_updated(db, complaint, old_type, new_type)
+        #TODO we must handle case of status changes
+
         # Send webhook notification for updates
-        event_type = "complaint.closed" if status_changed_to_closed else "complaint.updated"
+        #event_type = "complaint.closed" if status_changed_to_closed else "complaint.updated"
         
         # webhook_service.send_webhook_background(
         #     event_type=event_type,
