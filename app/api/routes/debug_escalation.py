@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 
-from app.db.session import get_db          # adjust to your actual dependency
+from app.db.session import get_db  # adjust to your actual dependency
 from app.models.complaint import Complaint
 from app.models.email_outbox import EmailOutbox
 from app.models.report import Report
@@ -29,6 +29,7 @@ router = APIRouter(prefix="/debug", tags=["debug"])
 
 
 # ── 1. Full system status ─────────────────────────────────────────────────────
+
 
 @router.get("/status")
 def debug_status(db: Session = Depends(get_db)):
@@ -64,18 +65,20 @@ def debug_status(db: Session = Depends(get_db)):
         hours = _hours_overdue(step)
         level = _level_to_send(hours, step.escalation_count or 0) if hours else None
         recipients = _build_recipients(level, complaint) if level else []
-        step_summaries.append({
-            "step_id": step.id,
-            "step_code": step.step_code,
-            "due_date": step.due_date.isoformat() if step.due_date else None,
-            "hours_overdue": round(hours, 2) if hours else None,
-            "escalation_count": step.escalation_count,
-            "next_level_to_send": level,
-            "recipients": recipients,
-            "complaint_ref": complaint.reference_number,
-            "quality_manager_email": complaint.quality_manager_email,
-            "plant_manager_email": complaint.plant_manager_email,
-        })
+        step_summaries.append(
+            {
+                "step_id": step.id,
+                "step_code": step.step_code,
+                "due_date": step.due_date.isoformat() if step.due_date else None,
+                "hours_overdue": round(hours, 2) if hours else None,
+                "escalation_count": step.escalation_count,
+                "next_level_to_send": level,
+                "recipients": recipients,
+                "complaint_ref": complaint.reference_number,
+                "quality_manager_email": complaint.quality_manager_email,
+                "plant_manager_email": complaint.plant_manager_email,
+            }
+        )
 
     # Outbox summary
     outbox_counts = {}
@@ -109,7 +112,9 @@ def debug_status(db: Session = Depends(get_db)):
         "smtp": smtp_info,
         "thresholds": _get_thresholds(),
         "overdue_steps_total": len(overdue_steps),
-        "steps_needing_escalation": [s for s in step_summaries if s["next_level_to_send"]],
+        "steps_needing_escalation": [
+            s for s in step_summaries if s["next_level_to_send"]
+        ],
         "all_overdue_steps": step_summaries,
         "outbox_counts": outbox_counts,
         "recent_failed_outbox": failed_details,
@@ -117,6 +122,7 @@ def debug_status(db: Session = Depends(get_db)):
 
 
 # ── 2. SMTP connectivity test ─────────────────────────────────────────────────
+
 
 @router.post("/test-smtp")
 def test_smtp(to: str):
@@ -146,6 +152,7 @@ def test_smtp(to: str):
 
 
 # ── 3. Manual escalation trigger ─────────────────────────────────────────────
+
 
 @router.post("/trigger-escalation")
 def trigger_escalation(db: Session = Depends(get_db)):

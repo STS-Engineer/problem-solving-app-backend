@@ -6,6 +6,7 @@ Provides both:
   • AsyncSessionLocal — async session factory for the scheduler jobs
   • async_engine      — exported so main.py can dispose the pool on shutdown
 """
+
 from __future__ import annotations
 
 from sqlalchemy import create_engine
@@ -13,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
-
 
 # ── Sync engine (used by all standard routes) ─────────────────────────────────
 engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
@@ -32,6 +32,7 @@ def get_db():
 
 # ── Async engine (used by scheduler jobs) ────────────────────────────────────
 
+
 def _make_async_url(sync_url: str) -> str:
     """
     Swap the sync driver prefix for its async equivalent.
@@ -40,9 +41,9 @@ def _make_async_url(sync_url: str) -> str:
     """
     replacements = {
         "postgresql://": "postgresql+asyncpg://",
-        "postgres://":   "postgresql+asyncpg://",  # Heroku-style
-        "sqlite:///":    "sqlite+aiosqlite:///",
-        "mysql://":      "mysql+aiomysql://",
+        "postgres://": "postgresql+asyncpg://",  # Heroku-style
+        "sqlite:///": "sqlite+aiosqlite:///",
+        "mysql://": "mysql+aiomysql://",
     }
     for old, new in replacements.items():
         if sync_url.startswith(old):

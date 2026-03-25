@@ -37,32 +37,40 @@ MAX_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
 SYSTEM_USER_ID: int = int(os.environ.get("SYSTEM_USER_ID", "1"))
 
 ALLOWED_MIME_TYPES = {
-    "image/jpeg", "image/png", "image/gif",
-    "image/webp", "image/bmp", "image/tiff",
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "image/tiff",
     "application/pdf",
-
     # Excel — browsers/OS send several variants
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # .xlsx
-    "application/vnd.ms-excel",                                           # .xls
-    "application/vnd.ms-office",                                          # .xls (IE/Edge)
-    "application/msexcel",                                                 # .xls (rare)
-    "application/x-msexcel",                                              # .xls (rare)
-    "application/octet-stream",                                           # generic binary (xlsx drag-drop)
-    "text/csv",                                                            # .csv
-    "text/plain",                                                          # .csv (some OSes)
+    "application/vnd.ms-excel",  # .xls
+    "application/vnd.ms-office",  # .xls (IE/Edge)
+    "application/msexcel",  # .xls (rare)
+    "application/x-msexcel",  # .xls (rare)
+    "application/octet-stream",  # generic binary (xlsx drag-drop)
+    "text/csv",  # .csv
+    "text/plain",  # .csv (some OSes)
 }
 
 ALLOWED_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".gif",
-    ".webp", ".bmp", ".tif", ".tiff",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".tif",
+    ".tiff",
     ".pdf",
-
     # Excel
     ".xlsx",
     ".xls",
     ".csv",  # optional
 }
-ActionType = Literal["occurrence", "detection","lesson"]
+ActionType = Literal["occurrence", "detection", "lesson"]
 
 
 def _sha256(data: bytes) -> str:
@@ -82,7 +90,10 @@ def _file_icon(mime_type: str) -> str:
         return "📄"
     if mime_type.startswith("image/"):
         return "🖼️"
-    if "spreadsheet" in mime_type or mime_type in ("application/vnd.ms-excel", "text/csv"):
+    if "spreadsheet" in mime_type or mime_type in (
+        "application/vnd.ms-excel",
+        "text/csv",
+    ):
         return "📊"
     return "📎"
 
@@ -90,18 +101,18 @@ def _file_icon(mime_type: str) -> str:
 def _serialize(sf: StepFile) -> dict:
     f = sf.file
     return {
-        "id":           sf.id,
-        "file_id":      f.id,
-        "filename":     f.original_name,
-        "url":          storage.url_for(f.stored_path),
-        "mime_type":    f.mime_type or "application/octet-stream",
-        "size_bytes":   f.size_bytes,
-        "size_label":   _human_size(f.size_bytes),
-        "icon":         _file_icon(f.mime_type or ""),
-        "is_image":     (f.mime_type or "").startswith("image/"),
-        "uploaded_at":  f.created_at.isoformat() if f.created_at else None,
-        "checksum":     f.checksum,
-        "action_type":  sf.action_type,
+        "id": sf.id,
+        "file_id": f.id,
+        "filename": f.original_name,
+        "url": storage.url_for(f.stored_path),
+        "mime_type": f.mime_type or "application/octet-stream",
+        "size_bytes": f.size_bytes,
+        "size_label": _human_size(f.size_bytes),
+        "icon": _file_icon(f.mime_type or ""),
+        "is_image": (f.mime_type or "").startswith("image/"),
+        "uploaded_at": f.created_at.isoformat() if f.created_at else None,
+        "checksum": f.checksum,
+        "action_type": sf.action_type,
         "action_index": sf.action_index,
     }
 
@@ -114,6 +125,7 @@ def _get_step_or_404(step_id: int, db: Session) -> ReportStep:
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
+
 
 @router.post("/{step_id}/files")
 async def upload_file(
@@ -170,13 +182,16 @@ async def upload_file(
 
     # Normalise ambiguous Excel types — trust the file extension instead
     if ext in {".xlsx", ".xls", ".csv"} and mime_type in {
-        "application/octet-stream", "text/plain", "application/vnd.ms-office",
-        "application/msexcel", "application/x-msexcel",
+        "application/octet-stream",
+        "text/plain",
+        "application/vnd.ms-office",
+        "application/msexcel",
+        "application/x-msexcel",
     }:
         ext_to_mime = {
             ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ".xls":  "application/vnd.ms-excel",
-            ".csv":  "text/csv",
+            ".xls": "application/vnd.ms-excel",
+            ".csv": "text/csv",
         }
         mime_type = ext_to_mime[ext]
     if mime_type not in ALLOWED_MIME_TYPES:
@@ -197,24 +212,24 @@ async def upload_file(
 
     # ── Persist to DB ─────────────────────────────────────────────────────────
     db_file = FileModel(
-        purpose       ="evidence",
-        original_name =original_name,
-        stored_path   =result["stored_name"],   # uuid.ext — leaf name only
-        size_bytes    =len(content),
-        mime_type     =mime_type,
-        uploaded_by   =SYSTEM_USER_ID,
-        checksum      =_sha256(content),
-        created_at    =datetime.now(timezone.utc),
+        purpose="evidence",
+        original_name=original_name,
+        stored_path=result["stored_name"],  # uuid.ext — leaf name only
+        size_bytes=len(content),
+        mime_type=mime_type,
+        uploaded_by=SYSTEM_USER_ID,
+        checksum=_sha256(content),
+        created_at=datetime.now(timezone.utc),
     )
     db.add(db_file)
     db.flush()
 
     step_file = StepFile(
         report_step_id=step_id,
-        file_id       =db_file.id,
-        action_type   =action_type,
-        action_index  =action_index,
-        created_at    =datetime.now(timezone.utc),
+        file_id=db_file.id,
+        action_type=action_type,
+        action_index=action_index,
+        created_at=datetime.now(timezone.utc),
     )
     db.add(step_file)
     db.commit()
@@ -276,6 +291,7 @@ async def delete_file(
         await storage.delete(stored_name)
     except Exception as exc:
         import logging
+
         logging.getLogger(__name__).warning(
             "GitHub delete failed for %s: %s", stored_name, exc
         )
@@ -301,9 +317,9 @@ async def download_file(
     if not sf:
         raise HTTPException(status_code=404, detail="File not found")
 
-    mime_type     = sf.file.mime_type or "application/octet-stream"
+    mime_type = sf.file.mime_type or "application/octet-stream"
     original_name = sf.file.original_name
-    stored_name   = sf.file.stored_path
+    stored_name = sf.file.stored_path
 
     try:
         content = await storage.fetch_content(stored_name)
@@ -314,7 +330,9 @@ async def download_file(
 
     # Images and PDFs open inline in the browser; everything else forces download
     is_previewable = mime_type.startswith("image/") or mime_type == "application/pdf"
-    disposition    = "inline" if is_previewable else f'attachment; filename="{original_name}"'
+    disposition = (
+        "inline" if is_previewable else f'attachment; filename="{original_name}"'
+    )
     return Response(
         content=content,
         media_type=mime_type,
@@ -349,9 +367,9 @@ def copy_file_to_action(
         db.query(StepFile)
         .filter(
             StepFile.report_step_id == step_id,
-            StepFile.file_id        == source.file_id,
-            StepFile.action_type    == action_type,
-            StepFile.action_index   == action_index,
+            StepFile.file_id == source.file_id,
+            StepFile.action_type == action_type,
+            StepFile.action_index == action_index,
         )
         .first()
     )
@@ -363,10 +381,10 @@ def copy_file_to_action(
 
     new_sf = StepFile(
         report_step_id=step_id,
-        file_id       =source.file_id,
-        action_type   =action_type,
-        action_index  =action_index,
-        created_at    =datetime.now(timezone.utc),
+        file_id=source.file_id,
+        action_type=action_type,
+        action_index=action_index,
+        created_at=datetime.now(timezone.utc),
     )
     db.add(new_sf)
     db.commit()

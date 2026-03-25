@@ -5,6 +5,7 @@ Revises: 37c966f030a0
 Create Date: 2026-03-06
 
 """
+
 from __future__ import annotations
 
 from alembic import op
@@ -27,9 +28,13 @@ def upgrade() -> None:
         sa.Column("step_id", sa.Integer(), nullable=True),
         sa.Column("complaint_id", sa.Integer(), nullable=True),
         sa.Column("escalation_level", sa.Integer(), nullable=False),
-        sa.Column("recipients", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column(
+            "recipients", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+        ),
         sa.Column("cc", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column("status", sa.String(length=20), nullable=False, server_default="pending"),
+        sa.Column(
+            "status", sa.String(length=20), nullable=False, server_default="pending"
+        ),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("max_attempts", sa.Integer(), nullable=False, server_default="3"),
         sa.Column("last_error", sa.Text(), nullable=True),
@@ -56,15 +61,19 @@ def upgrade() -> None:
     # Add FK constraints separately — use_alter avoids dependency resolution issues
     op.create_foreign_key(
         "fk_email_outbox_step_id",
-        "email_outbox", "report_steps",
-        ["step_id"], ["id"],
+        "email_outbox",
+        "report_steps",
+        ["step_id"],
+        ["id"],
         ondelete="SET NULL",
         use_alter=True,
     )
     op.create_foreign_key(
         "fk_email_outbox_complaint_id",
-        "email_outbox", "complaints",
-        ["complaint_id"], ["id"],
+        "email_outbox",
+        "complaints",
+        ["complaint_id"],
+        ["id"],
         ondelete="SET NULL",
         use_alter=True,
     )
@@ -81,7 +90,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_constraint("fk_email_outbox_step_id", "email_outbox", type_="foreignkey")
-    op.drop_constraint("fk_email_outbox_complaint_id", "email_outbox", type_="foreignkey")
+    op.drop_constraint(
+        "fk_email_outbox_complaint_id", "email_outbox", type_="foreignkey"
+    )
     op.drop_index("ix_email_outbox_status_retry", table_name="email_outbox")
     op.drop_index("ix_email_outbox_step_id", table_name="email_outbox")
     op.drop_index("ix_email_outbox_complaint_id", table_name="email_outbox")

@@ -5,10 +5,11 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from app.db.base import Base
-import app.models  
+import app.models
 
 config = context.config
 
@@ -30,7 +31,7 @@ print(f"Using database URL: {db_url}")
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=db_url, 
+        url=db_url,
         target_metadata=target_metadata,
         literal_binds=True,
         compare_type=True,
@@ -42,7 +43,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     connectable = create_engine(
-        db_url,  
+        db_url,
         poolclass=pool.NullPool,
         pool_pre_ping=True,
     )

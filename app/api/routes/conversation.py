@@ -30,6 +30,7 @@ from app.services.audit_service import (
 from app.services.chatbot_service import KnowledgeBaseRetriever
 from app.services.conversation_service import ConversationService
 from app.services.file_storage import storage
+from app.services.plan_push_service import PlanPushService
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +42,27 @@ MAX_SIZE_BYTES = 25 * 1024 * 1024
 SYSTEM_USER_ID: int = int(os.environ.get("SYSTEM_USER_ID", "1"))
 
 ALLOWED_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".gif",
-    ".webp", ".bmp", ".tif", ".tiff", ".pdf",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".pdf",
 }
 ALLOWED_MIME_TYPES = {
-    "image/jpeg", "image/png", "image/gif",
-    "image/webp", "image/bmp", "image/tiff",
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "image/tiff",
     "application/pdf",
 }
 
-_EVIDENCE_SYNC_SECTIONS = {"deviation", "implementation","lessons_learned"}
+_EVIDENCE_SYNC_SECTIONS = {"deviation", "implementation", "lessons_learned"}
 
 
 def _sha256(data: bytes) -> str:
@@ -76,23 +88,24 @@ def _file_icon(mime_type: str) -> str:
 def _serialize_file(sf: StepFile) -> dict:
     f = sf.file
     return {
-        "id":           sf.id,
-        "file_id":      f.id,
-        "filename":     f.original_name,
-        "url":          storage.url_for(f.stored_path),
-        "mime_type":    f.mime_type or "application/octet-stream",
-        "size_bytes":   f.size_bytes,
-        "size_label":   _human_size(f.size_bytes),
-        "icon":         _file_icon(f.mime_type or ""),
-        "is_image":     (f.mime_type or "").startswith("image/"),
-        "uploaded_at":  f.created_at.isoformat() if f.created_at else None,
-        "checksum":     f.checksum,
-        "action_type":  sf.action_type,
+        "id": sf.id,
+        "file_id": f.id,
+        "filename": f.original_name,
+        "url": storage.url_for(f.stored_path),
+        "mime_type": f.mime_type or "application/octet-stream",
+        "size_bytes": f.size_bytes,
+        "size_label": _human_size(f.size_bytes),
+        "icon": _file_icon(f.mime_type or ""),
+        "is_image": (f.mime_type or "").startswith("image/"),
+        "uploaded_at": f.created_at.isoformat() if f.created_at else None,
+        "checksum": f.checksum,
+        "action_type": sf.action_type,
         "action_index": sf.action_index,
     }
 
 
 # ── Step context ──────────────────────────────────────────────────────────────
+
 
 @dataclass
 class _StepContext:
@@ -117,22 +130,32 @@ def _resolve_step_context(db: Session, step_id: int) -> _StepContext:
     if not step:
         raise HTTPException(status_code=404, detail=f"Step {step_id} not found")
     rs, r, c = step
-    return _StepContext(complaint_id=c.id, report_id=r.id,
-                        step_code=rs.step_code, cqt_email=c.cqt_email)
- 
+    return _StepContext(
+        complaint_id=c.id, report_id=r.id, step_code=rs.step_code, cqt_email=c.cqt_email
+    )
+
 
 # ── Guards ────────────────────────────────────────────────────────────────────
 
 VALID_SECTION_KEYS = {
     "team_members",
-    "five_w_2h", "deviation", "is_is_not",
-    "containment", "restart",
-    "four_m_occurrence", "four_m_non_detection",
-    "corrective_occurrence", "corrective_detection",
-    "implementation", "monitoring_checklist",
-    "prevention", "knowledge", "lessons_learned",
+    "five_w_2h",
+    "deviation",
+    "is_is_not",
+    "containment",
+    "restart",
+    "four_m_occurrence",
+    "four_m_non_detection",
+    "corrective_occurrence",
+    "corrective_detection",
+    "implementation",
+    "monitoring_checklist",
+    "prevention",
+    "knowledge",
+    "lessons_learned",
     "closure",
-    "root_cause", "corrective_actions",
+    "root_cause",
+    "corrective_actions",
 }
 
 VALID_ACTION_TYPES = {"occurrence", "detection", "lesson"}
@@ -167,8 +190,12 @@ def _parse_action_scope(
         except (ValueError, IndexError):
             enc_action_index = None
 
-    action_type  = action_type_param  if action_type_param  is not None else enc_action_type
-    action_index = action_index_param if action_index_param is not None else enc_action_index
+    action_type = (
+        action_type_param if action_type_param is not None else enc_action_type
+    )
+    action_index = (
+        action_index_param if action_index_param is not None else enc_action_index
+    )
 
     if (action_type is None) != (action_index is None):
         raise HTTPException(
@@ -185,6 +212,7 @@ def _parse_action_scope(
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
+
 
 class SendMessageRequest(BaseModel):
     message: str
@@ -211,6 +239,7 @@ class SendMessageResponse(BaseModel):
 
 # ── Audit helpers ─────────────────────────────────────────────────────────────
 
+
 def _is_first_fill(previous_state: str, new_state: str) -> bool:
     if new_state != "fulfilled":
         return False
@@ -220,6 +249,7 @@ def _is_first_fill(previous_state: str, new_state: str) -> bool:
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
 
 @router.get(
     "/{step_id}/conversation/{section_key}",
@@ -238,14 +268,17 @@ def get_conversation(step_id: int, section_key: str, db: Session = Depends(get_d
     complaint_context = svc.get_complaint_context(step_id)
 
     return svc.get_or_start_conversation(
-        step_id, section_key,
+        step_id,
+        section_key,
         complaint_context=complaint_context or None,
         kb_coaching=kb_coaching,
         twenty_rules=twenty_rules,
     )
 
 
-@router.post("/{step_id}/conversation/{section_key}", response_model=SendMessageResponse)
+@router.post(
+    "/{step_id}/conversation/{section_key}", response_model=SendMessageResponse
+)
 def send_message(
     step_id: int,
     section_key: str,
@@ -295,18 +328,45 @@ def send_message(
             changed = [k for k, v in extracted.items() if existing_data.get(k) != v]
             first_fill = _is_first_fill(previous_state, new_state)
             if first_fill:
-                log_step_filled_sync(db, ctx.complaint_id, ctx.report_id, step_id,
-                                     ctx.step_code, fields_snapshot=extracted,
-                                     performed_by_email=ctx.cqt_email)
+                log_step_filled_sync(
+                    db,
+                    ctx.complaint_id,
+                    ctx.report_id,
+                    step_id,
+                    ctx.step_code,
+                    fields_snapshot=extracted,
+                    performed_by_email=ctx.cqt_email,
+                )
             elif changed:
-                log_step_updated_sync(db, ctx.complaint_id, ctx.report_id, step_id,
-                                      ctx.step_code, changed_fields=changed,
-                                      old_values={k: existing_data.get(k) for k in changed},
-                                      new_values={k: extracted[k] for k in changed},
-                                      performed_by_email=ctx.cqt_email)
+                log_step_updated_sync(
+                    db,
+                    ctx.complaint_id,
+                    ctx.report_id,
+                    step_id,
+                    ctx.step_code,
+                    changed_fields=changed,
+                    old_values={k: existing_data.get(k) for k in changed},
+                    new_values={k: extracted[k] for k in changed},
+                    performed_by_email=ctx.cqt_email,
+                )
             db.commit()
+            # if new_state == "fulfilled" and section_key == "implementation":
+            #     try:
+            #         PlanPushService(db).push_on_d6_fulfilled(
+            #             step_id=step_id,
+            #             cqt_email=ctx.cqt_email,
+            #         )
+            #     except Exception as push_exc:
+            #         logger.warning("plan_push: hook error for step %s: %s", step_id, push_exc, exc_info=True)
+
+            # return response
         except Exception as audit_exc:
-            logger.warning("Failed to write audit log for step %s: %s", step_id, audit_exc, exc_info=True)
+            logger.warning(
+                "Failed to write audit log for step %s: %s",
+                step_id,
+                audit_exc,
+                exc_info=True,
+            )
             try:
                 db.rollback()
             except Exception:
@@ -314,8 +374,22 @@ def send_message(
     else:
         try:
             db.commit()
+            # if new_state == "fulfilled" and section_key == "implementation":
+            #     try:
+            #         PlanPushService(db).push_on_d6_fulfilled(
+            #             step_id=step_id,
+            #             cqt_email=ctx.cqt_email,
+            #         )
+            #     except Exception as push_exc:
+            #         logger.warning("plan_push: hook error for step %s: %s", step_id, push_exc, exc_info=True)
+
+            # return response
         except Exception:
-            logger.warning("Failed to commit conversation update for step %s", step_id, exc_info=True)
+            logger.warning(
+                "Failed to commit conversation update for step %s",
+                step_id,
+                exc_info=True,
+            )
             try:
                 db.rollback()
             except Exception:
@@ -361,7 +435,9 @@ async def upload_conversation_files(
         content = await file.read()
 
         if len(content) == 0:
-            raise HTTPException(status_code=422, detail=f"File '{original_name}' is empty.")
+            raise HTTPException(
+                status_code=422, detail=f"File '{original_name}' is empty."
+            )
         if len(content) > MAX_SIZE_BYTES:
             raise HTTPException(
                 status_code=413,
@@ -376,7 +452,9 @@ async def upload_conversation_files(
         if mime_type == "image/jpg":
             mime_type = "image/jpeg"
         if mime_type not in ALLOWED_MIME_TYPES:
-            raise HTTPException(status_code=422, detail=f"MIME type '{mime_type}' is not allowed.")
+            raise HTTPException(
+                status_code=422, detail=f"MIME type '{mime_type}' is not allowed."
+            )
 
         # ── Upload to GitHub ──────────────────────────────────────────────────
         try:
@@ -390,24 +468,24 @@ async def upload_conversation_files(
 
         # ── Persist to DB ─────────────────────────────────────────────────────
         db_file = FileModel(
-            purpose      ="evidence",
+            purpose="evidence",
             original_name=original_name,
-            stored_path  =result["stored_name"],
-            size_bytes   =len(content),
-            mime_type    =mime_type,
-            uploaded_by  =SYSTEM_USER_ID,
-            checksum     =_sha256(content),
-            created_at   =datetime.now(timezone.utc),
+            stored_path=result["stored_name"],
+            size_bytes=len(content),
+            mime_type=mime_type,
+            uploaded_by=SYSTEM_USER_ID,
+            checksum=_sha256(content),
+            created_at=datetime.now(timezone.utc),
         )
         db.add(db_file)
         db.flush()
 
         step_file = StepFile(
             report_step_id=step_id,
-            file_id       =db_file.id,
-            action_type   =resolved_action_type,
-            action_index  =resolved_action_index,
-            created_at    =datetime.now(timezone.utc),
+            file_id=db_file.id,
+            action_type=resolved_action_type,
+            action_index=resolved_action_index,
+            created_at=datetime.now(timezone.utc),
         )
         db.add(step_file)
         db.flush()
@@ -424,25 +502,37 @@ async def upload_conversation_files(
     db.commit()
 
     return {
-        "uploaded":  results,
+        "uploaded": results,
         "filenames": [r["filename"] for r in results],
     }
 
 
-@router.delete("/{step_id}/conversation/{section_key}", response_model=ConversationResponse)
+@router.delete(
+    "/{step_id}/conversation/{section_key}", response_model=ConversationResponse
+)
 def reset_conversation(step_id: int, section_key: str, db: Session = Depends(get_db)):
     ctx = _resolve_step_context(db, step_id)
     _require_section(section_key)
     svc = ConversationService(db)
     result = svc.reset_conversation(step_id, section_key)
     try:
-        log_step_reopened_sync(db, ctx.complaint_id, ctx.report_id, step_id,
-                               ctx.step_code, section_key=section_key,
-                               performed_by_email=ctx.cqt_email)
+        log_step_reopened_sync(
+            db,
+            ctx.complaint_id,
+            ctx.report_id,
+            step_id,
+            ctx.step_code,
+            section_key=section_key,
+            performed_by_email=ctx.cqt_email,
+        )
         db.commit()
     except Exception as audit_exc:
-        logger.warning("Failed to write step_reopened audit for step %s: %s",
-                       step_id, audit_exc, exc_info=True)
+        logger.warning(
+            "Failed to write step_reopened audit for step %s: %s",
+            step_id,
+            audit_exc,
+            exc_info=True,
+        )
         try:
             db.rollback()
         except Exception:

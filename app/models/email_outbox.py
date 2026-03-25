@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -38,7 +37,6 @@ class EmailOutbox(Base):
 
     # ── Foreign keys ─────────────────────────────────────────────────────────
     # Nullable so outbox rows survive cascade deletes on parent records.
-    # Table names MUST match the actual __tablename__ values: "complaints", "report_steps"
     step_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("report_steps.id", ondelete="SET NULL"),
@@ -57,7 +55,9 @@ class EmailOutbox(Base):
 
     # ── Routing data ──────────────────────────────────────────────────────────
     # Stored at insert time because the complaint state can change before delivery.
-    recipients: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)   # ["a@b.com", ...]
+    recipients: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False
+    )  # ["a@b.com", ...]
     cc: Mapped[list[Any] | None] = mapped_column(JSONB, nullable=True)
 
     # ── Delivery state ────────────────────────────────────────────────────────
@@ -75,7 +75,9 @@ class EmailOutbox(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # next_retry_at drives the retry loop; updated with exponential backoff on failure.
     # Indexed together with status so the retry query is index-only.
@@ -90,7 +92,6 @@ class EmailOutbox(Base):
             "status IN ('pending', 'sent', 'failed', 'abandoned')",
             name="ck_email_outbox_status",
         ),
-        # Prevent duplicate pending escalation rows for the same (complaint, step, level).
         # This is a partial unique index — only applies while the row is 'pending',
         # so retries (failed → pending) and historical 'sent' rows are not affected.
         # SQLAlchemy renders this via Index with postgresql_where.

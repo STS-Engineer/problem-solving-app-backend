@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 from dotenv import load_dotenv
+
 load_dotenv()
 import httpx
 
@@ -21,20 +22,41 @@ logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
 
-_DEFAULT_TOKEN  = ""
-_DEFAULT_OWNER  = "STS-Engineer"
-_DEFAULT_REPO   = "problem-solving-app-backend"
+_DEFAULT_TOKEN = ""
+_DEFAULT_OWNER = "STS-Engineer"
+_DEFAULT_REPO = "problem-solving-app-backend"
 _DEFAULT_BRANCH = "uploads"
 _DEFAULT_FOLDER = "uploads/8d"
 _DEFAULT_REPORTS_FOLDER = "exports/8d-reports"
 
 
-def _token()  -> str: return os.environ.get("GITHUB_TOKEN",  _DEFAULT_TOKEN).strip()
-def _owner()  -> str: return os.environ.get("GITHUB_OWNER",  _DEFAULT_OWNER).strip()
-def _repo()   -> str: return os.environ.get("GITHUB_REPO",   _DEFAULT_REPO).strip()
-def _branch() -> str: return os.environ.get("GITHUB_BRANCH", _DEFAULT_BRANCH).strip()
-def _folder() -> str: return os.environ.get("GITHUB_FOLDER", _DEFAULT_FOLDER).strip().rstrip("/")
-def _reports_folder() -> str: return os.environ.get("GITHUB_REPORTS_FOLDER", _DEFAULT_REPORTS_FOLDER).strip().rstrip("/")
+def _token() -> str:
+    return os.environ.get("GITHUB_TOKEN", _DEFAULT_TOKEN).strip()
+
+
+def _owner() -> str:
+    return os.environ.get("GITHUB_OWNER", _DEFAULT_OWNER).strip()
+
+
+def _repo() -> str:
+    return os.environ.get("GITHUB_REPO", _DEFAULT_REPO).strip()
+
+
+def _branch() -> str:
+    return os.environ.get("GITHUB_BRANCH", _DEFAULT_BRANCH).strip()
+
+
+def _folder() -> str:
+    return os.environ.get("GITHUB_FOLDER", _DEFAULT_FOLDER).strip().rstrip("/")
+
+
+def _reports_folder() -> str:
+    return (
+        os.environ.get("GITHUB_REPORTS_FOLDER", _DEFAULT_REPORTS_FOLDER)
+        .strip()
+        .rstrip("/")
+    )
+
 
 def _headers() -> dict[str, str]:
     token = _token()
@@ -49,10 +71,11 @@ def _headers() -> dict[str, str]:
 
 def _require_env() -> None:
     missing = [
-        name for name, val in [
+        name
+        for name, val in [
             ("GITHUB_TOKEN", _token()),
             ("GITHUB_OWNER", _owner()),
-            ("GITHUB_REPO",  _repo()),
+            ("GITHUB_REPO", _repo()),
         ]
         if not val
     ]
@@ -63,6 +86,7 @@ def _require_env() -> None:
 
 
 # ── Service ───────────────────────────────────────────────────────────────────
+
 
 class FileStorageService:
     """
@@ -121,17 +145,17 @@ class FileStorageService:
         """
         _require_env()
 
-        ext         = Path(original_name).suffix.lower()
+        ext = Path(original_name).suffix.lower()
         stored_name = f"{uuid.uuid4().hex}{ext}"
-        repo_path   = self._repo_path(stored_name)
-        encoded     = base64.b64encode(content).decode()
+        repo_path = self._repo_path(stored_name)
+        encoded = base64.b64encode(content).decode()
 
         api_url = f"{_GITHUB_API}/repos/{_owner()}/{_repo()}/contents/{repo_path}"
 
         payload: dict[str, Any] = {
             "message": f"chore: upload evidence file {stored_name}",
             "content": encoded,
-            "branch":  _branch(),
+            "branch": _branch(),
         }
 
         async with httpx.AsyncClient(headers=_headers(), timeout=60) as client:
@@ -151,13 +175,15 @@ class FileStorageService:
         _require_env()
 
         repo_path = self._repo_path(stored_name)
-        api_url   = f"{_GITHUB_API}/repos/{_owner()}/{_repo()}/contents/{repo_path}"
+        api_url = f"{_GITHUB_API}/repos/{_owner()}/{_repo()}/contents/{repo_path}"
 
         async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
             r_get = await client.get(api_url, params={"ref": _branch()})
 
             if r_get.status_code == 404:
-                logger.warning("delete: file not found on GitHub, skipping: %s", stored_name)
+                logger.warning(
+                    "delete: file not found on GitHub, skipping: %s", stored_name
+                )
                 return
 
             r_get.raise_for_status()
@@ -168,8 +194,8 @@ class FileStorageService:
                 api_url,
                 json={
                     "message": f"chore: delete evidence file {stored_name}",
-                    "sha":     sha,
-                    "branch":  _branch(),
+                    "sha": sha,
+                    "branch": _branch(),
                 },
             )
             r_del.raise_for_status()
@@ -183,12 +209,12 @@ class FileStorageService:
     ) -> dict[str, str]:
         _require_env()
         repo_path = f"{_reports_folder()}/{filename}"
-        encoded   = base64.b64encode(content).decode()
-        api_url   = f"{_GITHUB_API}/repos/{_owner()}/{_repo()}/contents/{repo_path}"
-        payload   = {
+        encoded = base64.b64encode(content).decode()
+        api_url = f"{_GITHUB_API}/repos/{_owner()}/{_repo()}/contents/{repo_path}"
+        payload = {
             "message": f"chore: export 8D report {filename}",
             "content": encoded,
-            "branch":  _branch(),
+            "branch": _branch(),
         }
         async with httpx.AsyncClient(headers=_headers(), timeout=60) as client:
             r = await client.put(api_url, json=payload)
@@ -200,5 +226,7 @@ class FileStorageService:
             f"https://raw.githubusercontent.com"
             f"/{_owner()}/{_repo()}/{_branch()}/{_reports_folder()}/{filename}"
         )
+
+
 # ── Singleton — import this everywhere ───────────────────────────────────────
 storage = FileStorageService()

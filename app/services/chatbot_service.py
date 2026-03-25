@@ -6,12 +6,12 @@ Supports both full-step and per-section validation.
 Per-section: step_code is passed as "D2_five_w_2h", "D3_restart", etc.
 The KB lookup uses the full scoped code as the section_hint key.
 """
+
 import json
 import re
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Dict, List, Optional, Any
-from click import prompt
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from openai import OpenAI, OpenAIError
@@ -49,9 +49,7 @@ class D1LocalValidator:
             incomplete_fields.append(
                 "team_members: at least 2 members are required for a valid 8D team"
             )
-            suggestions.append(
-                "Add at least one more cross-functional member."
-            )
+            suggestions.append("Add at least one more cross-functional member.")
 
         seen_names: List[str] = []
 
@@ -133,6 +131,7 @@ class D1LocalValidator:
 # KNOWLEDGE BASE RETRIEVER
 # ============================================================
 
+
 class KnowledgeBaseRetriever:
     def __init__(self, db: Session):
         self.db = db
@@ -175,7 +174,7 @@ class KnowledgeBaseRetriever:
             row = self.db.execute(query, {"section_hint": hint}).fetchone()
             return row[0] if row and row[0] else None
 
-        parent_code = step_code.split("_")[0]   # e.g. "D4" from "D4_four_m_occurrence"
+        parent_code = step_code.split("_")[0]  # e.g. "D4" from "D4_four_m_occurrence"
 
         # ── 1. Explicit map (D2_five_w_2h, D2_is_is_not) ─────────────────────
         if step_code in self.SECTION_HINT_MAP:
@@ -192,7 +191,8 @@ class KnowledgeBaseRetriever:
                 return content
             logger.warning(
                 "⚠️  [KB COACHING] Explicit hint '%s' not found in DB for '%s'",
-                hint, step_code,
+                hint,
+                step_code,
             )
 
         # ── 2. Parent-level shared chunk (D3_* … D8_*) ────────────────────────
@@ -211,7 +211,8 @@ class KnowledgeBaseRetriever:
                 return content
             logger.warning(
                 "⚠️  [KB COACHING] Parent hint '%s' not found in DB for '%s'",
-                hint, parent_code,
+                hint,
+                parent_code,
             )
 
         # ── 3. D2_deviation fallback chain: D2_five_w_2h → D2 parent ─────────
@@ -226,7 +227,10 @@ class KnowledgeBaseRetriever:
                         "\n%s\n⚠️  [KB COACHING] step_code='D2_deviation' has no dedicated chunk.\n"
                         "   strategy : FALLBACK → %s\n"
                         "   chars    : %d\n%s",
-                        SEP, fallback_hint, len(content), SEP,
+                        SEP,
+                        fallback_hint,
+                        len(content),
+                        SEP,
                     )
                     return content
 
@@ -250,8 +254,7 @@ class KnowledgeBaseRetriever:
             f"{step_code}_coaching_validation",
         ]
         raise ValueError(
-            f"No coaching content found for '{step_code}'. "
-            f"Hints tried: {tried}"
+            f"No coaching content found for '{step_code}'. " f"Hints tried: {tried}"
         )
 
     def get_twenty_rules(self) -> str:
@@ -270,11 +273,11 @@ class KnowledgeBaseRetriever:
         logger.warning("⚠️ 20 Rules not found in KB")
         return ""
 
-    
 
 # ============================================================
 # STEP DATA FORMATTER
 # ============================================================
+
 
 def _val(v: Any, fallback: str = "—") -> str:
     if v is None or v == "" or v == []:
@@ -313,29 +316,31 @@ class StepDataFormatter:
     @staticmethod
     def format_section(step_code: str, step_data: Dict) -> str:
         formatters = {
-            "D2_five_w_2h":             StepDataFormatter._fmt_d2_five_w_2h,
-            "D2_deviation":             StepDataFormatter._fmt_d2_deviation,
-            "D2_is_is_not":             StepDataFormatter._fmt_d2_is_is_not,
-            "D3_defected_parts":        StepDataFormatter._fmt_d3_defected_parts,
-            "D3_suspected_parts":       StepDataFormatter._fmt_d3_suspected_parts,
-            "D3_restart":               StepDataFormatter._fmt_d3_restart,
-            "D4_four_m_occurrence":     StepDataFormatter._fmt_d4_four_m_occurrence,
-            "D4_four_m_non_detection":  StepDataFormatter._fmt_d4_four_m_non_detection,
+            "D2_five_w_2h": StepDataFormatter._fmt_d2_five_w_2h,
+            "D2_deviation": StepDataFormatter._fmt_d2_deviation,
+            "D2_is_is_not": StepDataFormatter._fmt_d2_is_is_not,
+            "D3_defected_parts": StepDataFormatter._fmt_d3_defected_parts,
+            "D3_suspected_parts": StepDataFormatter._fmt_d3_suspected_parts,
+            "D3_restart": StepDataFormatter._fmt_d3_restart,
+            "D4_four_m_occurrence": StepDataFormatter._fmt_d4_four_m_occurrence,
+            "D4_four_m_non_detection": StepDataFormatter._fmt_d4_four_m_non_detection,
             "D5_corrective_occurrence": StepDataFormatter._fmt_d5_corrective_occurrence,
-            "D5_corrective_detection":  StepDataFormatter._fmt_d5_corrective_detection,
-            "D6_implementation":        StepDataFormatter._fmt_d6_implementation,
-            "D6_monitoring_checklist":  StepDataFormatter._fmt_d6_monitoring_checklist,
-            "D7_prevention":            StepDataFormatter._fmt_d7_prevention,
-            "D7_knowledge":             StepDataFormatter._fmt_d7_knowledge,
-            "D7_lessons_learned":       StepDataFormatter._fmt_d7_lessons_learned,
-            "D8_closure":               StepDataFormatter._fmt_d8_closure,
+            "D5_corrective_detection": StepDataFormatter._fmt_d5_corrective_detection,
+            "D6_implementation": StepDataFormatter._fmt_d6_implementation,
+            "D6_monitoring_checklist": StepDataFormatter._fmt_d6_monitoring_checklist,
+            "D7_prevention": StepDataFormatter._fmt_d7_prevention,
+            "D7_knowledge": StepDataFormatter._fmt_d7_knowledge,
+            "D7_lessons_learned": StepDataFormatter._fmt_d7_lessons_learned,
+            "D8_closure": StepDataFormatter._fmt_d8_closure,
         }
         fn = formatters.get(step_code)
         if fn:
             try:
                 return fn(step_data)
             except Exception as exc:
-                logger.warning("Formatter %s raised %s — falling back to generic", step_code, exc)
+                logger.warning(
+                    "Formatter %s raised %s — falling back to generic", step_code, exc
+                )
         return StepDataFormatter._fmt_generic(step_data)
 
     @staticmethod
@@ -367,12 +372,12 @@ class StepDataFormatter:
         lines.append("=== 5W2H ANALYSIS ===")
         five_w = data.get("five_w_2h") or {}
         mapping = {
-            "Who":           "who",
-            "What":          "what",
-            "When":          "when",
-            "Where":         "where",
-            "Why":           "why",
-            "How":           "how",
+            "Who": "who",
+            "What": "what",
+            "When": "when",
+            "Where": "where",
+            "Why": "why",
+            "How": "how",
             "How Much/Many": "how_much",
         }
         for label, key in mapping.items():
@@ -387,7 +392,9 @@ class StepDataFormatter:
         lines.append(f"  Observed Situation  : {_val(data.get('observed_situation'))}")
         ev = data.get("evidence_documents") or []
         if isinstance(ev, list):
-            lines.append(f"  Evidence Documents  : {', '.join(str(e) for e in ev) or '—'}")
+            lines.append(
+                f"  Evidence Documents  : {', '.join(str(e) for e in ev) or '—'}"
+            )
         else:
             lines.append(f"  Evidence Documents  : {_val(ev)}")
         return "\n".join(lines)
@@ -400,7 +407,12 @@ class StepDataFormatter:
             lines.append("  (no factors provided)")
             return "\n".join(lines)
         headers = ["Factor", "IS", "IS NOT", "Distinction"]
-        key_map = {"Factor": "factor", "IS": "is_value", "IS NOT": "is_not_value", "Distinction": "distinction"}
+        key_map = {
+            "Factor": "factor",
+            "IS": "is_value",
+            "IS NOT": "is_not_value",
+            "Distinction": "distinction",
+        }
         lines.append(_row_table(headers, factors, key_map))
         return "\n".join(lines)
 
@@ -411,10 +423,14 @@ class StepDataFormatter:
         lines.append(f"  Returned               : {_bool_str(dp.get('returned'))}")
         lines.append(f"  Isolated               : {_bool_str(dp.get('isolated'))}")
         if dp.get("isolated"):
-            lines.append(f"    Isolation Location   : {_val(dp.get('isolated_location'))}")
+            lines.append(
+                f"    Isolation Location   : {_val(dp.get('isolated_location'))}"
+            )
         lines.append(f"  Identified             : {_bool_str(dp.get('identified'))}")
         if dp.get("identified"):
-            lines.append(f"    Identification Method: {_val(dp.get('identified_method'))}")
+            lines.append(
+                f"    Identification Method: {_val(dp.get('identified_method'))}"
+            )
         lines.append(f"  Quantity Affected      : {_val(dp.get('quantity'))}")
         lines.append(f"  Disposition            : {_val(dp.get('disposition'))}")
         lines.append(f"  Notes                  : {_val(dp.get('notes'))}")
@@ -427,7 +443,9 @@ class StepDataFormatter:
         lines.append(f"  Status                : {_val(sp.get('status'))}")
         lines.append(f"  Quantity              : {_val(sp.get('quantity'))}")
         lines.append(f"  Location              : {_val(sp.get('location'))}")
-        lines.append(f"  Alert Communicated To : {_val(data.get('alert_communicated_to'))}")
+        lines.append(
+            f"  Alert Communicated To : {_val(data.get('alert_communicated_to'))}"
+        )
         lines.append(f"  Alert Number          : {_val(data.get('alert_number'))}")
         return "\n".join(lines)
 
@@ -438,14 +456,25 @@ class StepDataFormatter:
         lines.append(f"  Restart Authorised    : {_bool_str(rp.get('authorised'))}")
         lines.append(f"  Restart Date          : {_val(rp.get('date'))}")
         lines.append(f"  Restart Conditions    : {_val(rp.get('conditions'))}")
-        lines.append(f"  Containment Responsible: {_val(data.get('containment_responsible'))}")
+        lines.append(
+            f"  Containment Responsible: {_val(data.get('containment_responsible'))}"
+        )
         return "\n".join(lines)
 
     @staticmethod
-    def _fmt_d4_four_m(label: str, four_m_key: str, whys_key: str, rc_key: str, data: Dict) -> str:
+    def _fmt_d4_four_m(
+        label: str, four_m_key: str, whys_key: str, rc_key: str, data: Dict
+    ) -> str:
         lines = [f"=== {label} ==="]
         four_m = data.get(four_m_key) or {}
-        categories = ["Man", "Machine", "Method", "Material", "Measurement", "Environment"]
+        categories = [
+            "Man",
+            "Machine",
+            "Method",
+            "Material",
+            "Measurement",
+            "Environment",
+        ]
         lines.append("  4M / Ishikawa Factors:")
         for cat in categories:
             val = four_m.get(cat.lower()) or four_m.get(cat, "")
@@ -457,8 +486,12 @@ class StepDataFormatter:
         if isinstance(whys, list):
             for i, why in enumerate(whys, 1):
                 if isinstance(why, dict):
-                    lines.append(f"    Why {i}: {_val(why.get('why') or why.get('question') or why.get('text'))}")
-                    lines.append(f"     → Because: {_val(why.get('because') or why.get('answer'))}")
+                    lines.append(
+                        f"    Why {i}: {_val(why.get('why') or why.get('question') or why.get('text'))}"
+                    )
+                    lines.append(
+                        f"     → Because: {_val(why.get('because') or why.get('answer'))}"
+                    )
                 else:
                     lines.append(f"    Why {i}: {_val(why)}")
         elif isinstance(whys, dict):
@@ -479,14 +512,20 @@ class StepDataFormatter:
     def _fmt_d4_four_m_occurrence(data: Dict) -> str:
         return StepDataFormatter._fmt_d4_four_m(
             "ROOT CAUSE — OCCURRENCE",
-            "four_m_occurrence", "five_whys_occurrence", "root_cause_occurrence", data,
+            "four_m_occurrence",
+            "five_whys_occurrence",
+            "root_cause_occurrence",
+            data,
         )
 
     @staticmethod
     def _fmt_d4_four_m_non_detection(data: Dict) -> str:
         return StepDataFormatter._fmt_d4_four_m(
             "ROOT CAUSE — NON-DETECTION",
-            "four_m_non_detection", "five_whys_non_detection", "root_cause_non_detection", data,
+            "four_m_non_detection",
+            "five_whys_non_detection",
+            "root_cause_non_detection",
+            data,
         )
 
     @staticmethod
@@ -536,19 +575,25 @@ class StepDataFormatter:
             lines.append(f"         Due Date     : {_val(a.get('due_date'))}")
             lines.append(f"         Imp. Date    : {_val(a.get('imp_date'))}")
             lines.append(f"         Evidence     : {_val(a.get('evidence'))}")
-            lines.append(f"         Implemented? : {'✅ Yes' if has_impl else '❌ Not yet'}")
+            lines.append(
+                f"         Implemented? : {'✅ Yes' if has_impl else '❌ Not yet'}"
+            )
             lines.append("")
         return "\n".join(lines)
 
     @staticmethod
     def _fmt_d6_implementation(data: Dict) -> str:
         lines = ["=== CORRECTIVE ACTION IMPLEMENTATION ==="]
-        lines.append(StepDataFormatter._fmt_d6_action_table(
-            "Occurrence Actions", data.get("corrective_actions_occurrence") or []
-        ))
-        lines.append(StepDataFormatter._fmt_d6_action_table(
-            "Detection Actions", data.get("corrective_actions_detection") or []
-        ))
+        lines.append(
+            StepDataFormatter._fmt_d6_action_table(
+                "Occurrence Actions", data.get("corrective_actions_occurrence") or []
+            )
+        )
+        lines.append(
+            StepDataFormatter._fmt_d6_action_table(
+                "Detection Actions", data.get("corrective_actions_detection") or []
+            )
+        )
         return "\n".join(lines)
 
     @staticmethod
@@ -557,9 +602,13 @@ class StepDataFormatter:
         m = data.get("monitoring") or {}
         lines.append(f"  Monitoring Interval   : {_val(m.get('monitoring_interval'))}")
         pieces = m.get("pieces_produced")
-        lines.append(f"  Pieces Produced       : {pieces if pieces is not None else '—'}")
+        lines.append(
+            f"  Pieces Produced       : {pieces if pieces is not None else '—'}"
+        )
         rej = m.get("rejection_rate")
-        lines.append(f"  Rejection Rate        : {f'{rej}%' if rej is not None else '—'}")
+        lines.append(
+            f"  Rejection Rate        : {f'{rej}%' if rej is not None else '—'}"
+        )
         lines.append(f"  Shift 1 Data          : {_val(m.get('shift_1_data'))}")
         lines.append(f"  Shift 2 Data          : {_val(m.get('shift_2_data'))}")
         lines.append("")
@@ -575,7 +624,11 @@ class StepDataFormatter:
             lines.append("  (no checklist items)")
         else:
             shift_keys = [f"shift_{i}" for i in range(1, num_shifts + 1)]
-            checked = [item for item in checklist if isinstance(item, dict) and any(item.get(k) for k in shift_keys)]
+            checked = [
+                item
+                for item in checklist
+                if isinstance(item, dict) and any(item.get(k) for k in shift_keys)
+            ]
             total = len(checklist)
             pct = round(len(checked) / total * 100) if total else 0
             lines.append(f"  Completion: {len(checked)}/{total} items ({pct}%)")
@@ -584,7 +637,9 @@ class StepDataFormatter:
             for item in checked:
                 if isinstance(item, dict):
                     shift_marks = ", ".join(
-                        f"S{i}" for i in range(1, num_shifts + 1) if item.get(f"shift_{i}")
+                        f"S{i}"
+                        for i in range(1, num_shifts + 1)
+                        if item.get(f"shift_{i}")
                     )
                     lines.append(f"    ✅ [{shift_marks}] {_val(item.get('question'))}")
             unchecked = [item for item in checklist if item not in checked]
@@ -607,9 +662,15 @@ class StepDataFormatter:
                 if not isinstance(r, dict):
                     continue
                 lines.append(f"  Risk #{i}:")
-                lines.append(f"    Area / Line / Product : {_val(r.get('area_line_product'))}")
-                lines.append(f"    Similar Risk Present  : {_val(r.get('similar_risk_present'))}")
-                lines.append(f"    Action Taken          : {_val(r.get('action_taken'))}")
+                lines.append(
+                    f"    Area / Line / Product : {_val(r.get('area_line_product'))}"
+                )
+                lines.append(
+                    f"    Similar Risk Present  : {_val(r.get('similar_risk_present'))}"
+                )
+                lines.append(
+                    f"    Action Taken          : {_val(r.get('action_taken'))}"
+                )
                 lines.append("")
         lines.append("=== REPLICATION VALIDATION ===")
         reps = data.get("replication_validations") or []
@@ -621,9 +682,15 @@ class StepDataFormatter:
                     continue
                 lines.append(f"  Replication #{i}:")
                 lines.append(f"    Line / Site           : {_val(r.get('line_site'))}")
-                lines.append(f"    Action Replicated     : {_val(r.get('action_replicated'))}")
-                lines.append(f"    Confirmation Method   : {_val(r.get('confirmation_method'))}")
-                lines.append(f"    Confirmed By          : {_val(r.get('confirmed_by'))}")
+                lines.append(
+                    f"    Action Replicated     : {_val(r.get('action_replicated'))}"
+                )
+                lines.append(
+                    f"    Confirmation Method   : {_val(r.get('confirmation_method'))}"
+                )
+                lines.append(
+                    f"    Confirmed By          : {_val(r.get('confirmed_by'))}"
+                )
                 lines.append("")
         return "\n".join(lines)
 
@@ -639,7 +706,9 @@ class StepDataFormatter:
                     continue
                 lines.append(f"  Document #{i}:")
                 lines.append(f"    Type              : {_val(k.get('document_type'))}")
-                lines.append(f"    Topic / Reference : {_val(k.get('topic_reference'))}")
+                lines.append(
+                    f"    Topic / Reference : {_val(k.get('topic_reference'))}"
+                )
                 lines.append(f"    Owner             : {_val(k.get('owner'))}")
                 lines.append(f"    Location / Link   : {_val(k.get('location_link'))}")
                 lines.append("")
@@ -733,7 +802,6 @@ MINIMUM PASS CRITERIA for this section:
 - The "Distinction" column must explain WHY the difference matters
 - Empty or near-identical IS/IS NOT pairs should be flagged as incomplete
 """,
-
     # D3
     "D3_defected_parts": """
 MINIMUM PASS CRITERIA for this section:
@@ -754,7 +822,6 @@ MINIMUM PASS CRITERIA for this section:
 - If restart is authorised, conditions for restart must be documented
 - Containment responsible person must be named (not just a department)
 """,
-
     # D4
     "D4_four_m_occurrence": """
 MINIMUM PASS CRITERIA for this section:
@@ -771,7 +838,6 @@ MINIMUM PASS CRITERIA for this section:
 - Root cause must explain a gap in the detection/control system
 - Validation method must be stated
 """,
-
     # D5
     "D5_corrective_occurrence": """
 MINIMUM PASS CRITERIA for this section:
@@ -786,7 +852,6 @@ MINIMUM PASS CRITERIA for this section:
 - Actions must directly address the detection gap from D4 non-detection root cause
 - Named responsible person and due date are mandatory per action
 """,
-
     # D6
     "D6_implementation": """
 MINIMUM PASS CRITERIA for this section:
@@ -803,7 +868,6 @@ MINIMUM PASS CRITERIA for this section:
 - Audited by and audit date are expected — flag if missing but do not fail on them alone
 - Shift data fields add value but are not blocking for a pass
 """,
-
     # D7
     "D7_prevention": """
 MINIMUM PASS CRITERIA for this section:
@@ -825,7 +889,6 @@ MINIMUM PASS CRITERIA for this section:
   and what systemic change was made; a one-line conclusion is not acceptable
 - Vague conclusions like "we will be more careful" always FAIL
 """,
-
     # D8
     "D8_closure": """
 MINIMUM PASS CRITERIA for this section:
@@ -886,6 +949,7 @@ You must return ONLY valid JSON. No text outside the JSON.
 # PROMPT BUILDER
 # ============================================================
 
+
 class PromptBuilder:
     @staticmethod
     def format_step_data(step_code: str, step_data: Dict) -> str:
@@ -895,25 +959,31 @@ class PromptBuilder:
     def format_complaint_context(complaint: Dict) -> str:
         if not complaint:
             return "No complaint context available."
-        return "\n".join([
-            "COMPLAINT CONTEXT (use this to assess relevance and specificity of answers):",
-            "=" * 60,
-            f"  Problem Name  : {complaint.get('complaint_name', 'N/A')}",
-            f"  Description   : {complaint.get('complaint_description', 'N/A')}",
-            f"  Product Line  : {complaint.get('product_line', 'N/A')}",
-            f"  Plant         : {complaint.get('plant', 'N/A')}",
-            f"  Defects       : {complaint.get('defects', 'N/A')}",
-            "",
-            "⚠️  Answers that do not reference this specific complaint context",
-            "    (e.g. copy-paste boilerplate) must be flagged as quality issues.",
-        ])
+        return "\n".join(
+            [
+                "COMPLAINT CONTEXT (use this to assess relevance and specificity of answers):",
+                "=" * 60,
+                f"  Problem Name  : {complaint.get('complaint_name', 'N/A')}",
+                f"  Description   : {complaint.get('complaint_description', 'N/A')}",
+                f"  Product Line  : {complaint.get('product_line', 'N/A')}",
+                f"  Plant         : {complaint.get('plant', 'N/A')}",
+                f"  Defects       : {complaint.get('defects', 'N/A')}",
+                "",
+                "⚠️  Answers that do not reference this specific complaint context",
+                "    (e.g. copy-paste boilerplate) must be flagged as quality issues.",
+            ]
+        )
 
     @staticmethod
     def _get_relevant_rules(step_code: str, twenty_rules: str) -> str:
         floor_relevant = {
-            "D3_defected_parts", "D3_suspected_parts", "D3_restart",
-            "D4_four_m_occurrence", "D4_four_m_non_detection",
-            "D6_implementation", "D6_monitoring_checklist",
+            "D3_defected_parts",
+            "D3_suspected_parts",
+            "D3_restart",
+            "D4_four_m_occurrence",
+            "D4_four_m_non_detection",
+            "D6_implementation",
+            "D6_monitoring_checklist",
         }
         if step_code not in floor_relevant or not twenty_rules:
             return ""
@@ -940,14 +1010,20 @@ the content above. Do not speculate or invent violations.
         formatted_complaint = PromptBuilder.format_complaint_context(complaint)
         logger.info(
             "\n%s\n📋 [PROMPT BLOCK 1/5] COMPLAINT CONTEXT  (%s)\n%s\n%s",
-            SEP, step_code, SEP, formatted_complaint,
+            SEP,
+            step_code,
+            SEP,
+            formatted_complaint,
         )
 
         # ── BLOC 2 : Step data (formatted) ────────────────────────────────────
         formatted_data = PromptBuilder.format_step_data(step_code, step_data)
         logger.info(
             "\n%s\n📝 [PROMPT BLOCK 2/5] FORMATTED STEP DATA  (%s)\n%s\n%s",
-            SEP, step_code, SEP, formatted_data,
+            SEP,
+            step_code,
+            SEP,
+            formatted_data,
         )
 
         # ── BLOC 3 : Floor rules (only for relevant sections) ─────────────────
@@ -955,7 +1031,10 @@ the content above. Do not speculate or invent violations.
         if rules_section:
             logger.info(
                 "\n%s\n📏 [PROMPT BLOCK 3/5] FLOOR RULES INJECTED  (%s)\n%s\n%s",
-                SEP, step_code, SEP, rules_section,
+                SEP,
+                step_code,
+                SEP,
+                rules_section,
             )
         else:
             logger.info(
@@ -968,7 +1047,10 @@ the content above. Do not speculate or invent violations.
         if pass_criteria:
             logger.info(
                 "\n%s\n✅ [PROMPT BLOCK 4/5] PASS CRITERIA  (%s)\n%s\n%s",
-                SEP, step_code, SEP, pass_criteria,
+                SEP,
+                step_code,
+                SEP,
+                pass_criteria,
             )
         else:
             logger.warning(
@@ -979,11 +1061,19 @@ the content above. Do not speculate or invent violations.
         # ── BLOC 5 : Coaching ─────────────────────────────────────────────────
         logger.info(
             "\n%s\n🎓 [PROMPT BLOCK 5/5] COACHING CONTENT  (%s)  [%d chars]\n%s\n%s",
-            SEP, step_code, len(coaching), SEP, coaching,
+            SEP,
+            step_code,
+            len(coaching),
+            SEP,
+            coaching,
         )
 
         parts = step_code.split("_", 1)
-        display_code = f"{parts[0]} / {parts[1].replace('_', ' ').title()}" if len(parts) == 2 else step_code
+        display_code = (
+            f"{parts[0]} / {parts[1].replace('_', ' ').title()}"
+            if len(parts) == 2
+            else step_code
+        )
 
         return f"""
 ## SECTION BEING VALIDATED: {display_code}
@@ -1069,6 +1159,7 @@ STRICT RULES:
 # OPENAI CLIENT
 # ============================================================
 
+
 class OpenAIClient:
     def __init__(self):
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
@@ -1077,7 +1168,7 @@ class OpenAIClient:
         try:
             logger.info("🤖 Calling OpenAI %s...", settings.OPENAI_MODEL)
             logger.info("Prompt length: %d chars", len(prompt))
-            logger.info("Prompt content:\n%s", prompt) 
+            logger.info("Prompt content:\n%s", prompt)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             with open(f"debug_prompt_{timestamp}.txt", "w", encoding="utf-8") as f:
 
@@ -1085,8 +1176,6 @@ class OpenAIClient:
                 f.write(prompt)
                 f.write("\n\n")
 
-                
-        
             response = self.client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=[
@@ -1109,6 +1198,7 @@ class OpenAIClient:
 # ============================================================
 # RESPONSE PARSER
 # ============================================================
+
 
 class ResponseParser:
     @staticmethod

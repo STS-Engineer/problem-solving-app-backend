@@ -15,7 +15,9 @@ class ComplaintBase(BaseModel):
     customer_plant_name: Optional[str] = Field(None, max_length=255)
     avocarbon_plant: Optional[PlantEnum] = None
     avocarbon_product_type: Optional[str] = Field(None, max_length=100)
-    potential_avocarbon_process_linked_to_problem: Optional[str] = Field(None, max_length=500)
+    potential_avocarbon_process_linked_to_problem: Optional[str] = Field(
+        None, max_length=500
+    )
 
     product_line: ProductLineEnum
     concerned_application: Optional[str] = Field(None, max_length=255)
@@ -32,8 +34,9 @@ class ComplaintBase(BaseModel):
     approved_by_email: Optional[str] = None
     status: Optional[str] = Field("open", max_length=50)
     priority: Optional[str] = Field("normal", max_length=20)
-    
+
     due_date: Optional[datetime] = None
+
 
 class ComplaintCreate(ComplaintBase):
     # the authenticated user is the reporter; we still accept it explicitly for now
@@ -47,7 +50,9 @@ class ComplaintUpdate(BaseModel):
     customer_plant_name: Optional[str] = Field(None, max_length=255)
     avocarbon_plant: Optional[PlantEnum] = None
     avocarbon_product_type: Optional[str] = Field(None, max_length=100)
-    potential_avocarbon_process_linked_to_problem: Optional[str] = Field(None, max_length=500)
+    potential_avocarbon_process_linked_to_problem: Optional[str] = Field(
+        None, max_length=500
+    )
 
     product_line: Optional[ProductLineEnum] = None
     concerned_application: Optional[str] = Field(None, max_length=255)
@@ -68,6 +73,7 @@ class ComplaintUpdate(BaseModel):
     # due_date: Optional[datetime] = None
     # closed_at: Optional[datetime] = None
 
+
 class ComplaintRead(ComplaintBase):
     id: int
     reported_by: int
@@ -75,11 +81,14 @@ class ComplaintRead(ComplaintBase):
     updated_at: datetime
     closed_at: Optional[datetime] = None
     reference_number: str
+
     class Config:
         from_attributes = True
 
+
 class ComplaintListItem(BaseModel):
     """Lightweight schema for list views"""
+
     id: int
     reference_number: str
     complaint_name: str
@@ -97,24 +106,26 @@ class ComplaintListItem(BaseModel):
     repetitive_complete_with_number: Optional[str]
     created_at: datetime
     potential_avocarbon_process_linked_to_problem: Optional[str]
-    complaint_description: Optional[str]  
-    closed_at: Optional[datetime] 
+    complaint_description: Optional[str]
+    closed_at: Optional[datetime]
 
     has_export_report: bool = False
     export_filename: Optional[str] = None
-    current_step_code: Optional[str] = None    
+    current_step_code: Optional[str] = None
     all_completed: bool = False
     has_report: bool = False
-    cqt_email: Optional[str]                 
-    quality_manager_email: Optional[str]     
-    plant_manager_email: Optional[str]       
+    cqt_email: Optional[str]
+    quality_manager_email: Optional[str]
+    plant_manager_email: Optional[str]
+
     class Config:
         from_attributes = True
+
 
 class ComplaintSyncResponse(BaseModel):
     complaints: List[ComplaintRead]
     count: int
     next_poll_after: str
-    
+
     class Config:
         from_attributes = True

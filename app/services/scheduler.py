@@ -1,6 +1,7 @@
 """
 app/services/scheduler.py
 """
+
 from __future__ import annotations
 
 import logging
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 TEST_MODE = os.getenv("TEST_ESCALATION", "false").lower() == "true"
-DEV_MODE  = os.getenv("DEV_MODE", "false").lower() == "true"
+DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
 
 CHECK_INTERVAL_MINUTES = 3 if TEST_MODE else 30
 RETRY_INTERVAL_MINUTES = 10
@@ -32,23 +33,21 @@ _scheduler: BackgroundScheduler | None = None
 
 # ── Advisory lock helpers (sync) ──────────────────────────────────────────────
 
+
 def _try_acquire_lock(db, lock_id: int) -> bool:
     result = db.execute(
-        text("SELECT pg_try_advisory_lock(:lock_id)"),
-        {"lock_id": lock_id}
+        text("SELECT pg_try_advisory_lock(:lock_id)"), {"lock_id": lock_id}
     )
     return result.scalar()
 
 
 def _release_lock(db, lock_id: int) -> None:
-    db.execute(
-        text("SELECT pg_advisory_unlock(:lock_id)"),
-        {"lock_id": lock_id}
-    )
+    db.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": lock_id})
     db.commit()
 
 
 # ── Core job runner ───────────────────────────────────────────────────────────
+
 
 def _run_job(lock_id: int, job_fn, job_name: str) -> None:
     """
@@ -61,13 +60,16 @@ def _run_job(lock_id: int, job_fn, job_name: str) -> None:
             try:
                 acquired = _try_acquire_lock(db, lock_id)
             except Exception:
-                logger.exception("%s: failed to acquire advisory lock — skipping", job_name)
+                logger.exception(
+                    "%s: failed to acquire advisory lock — skipping", job_name
+                )
                 return
 
             if not acquired:
                 logger.debug(
                     "%s: advisory lock %d held by another instance — skipping.",
-                    job_name, lock_id,
+                    job_name,
+                    lock_id,
                 )
                 return
 
@@ -85,13 +87,15 @@ def _run_job(lock_id: int, job_fn, job_name: str) -> None:
                     logger.exception(
                         "%s: failed to release advisory lock %d — "
                         "will be released when connection is recycled.",
-                        job_name, lock_id,
+                        job_name,
+                        lock_id,
                     )
     finally:
         db.close()
 
 
 # ── Job wrappers ──────────────────────────────────────────────────────────────
+
 
 def _run_escalation_check() -> None:
     _run_job(LOCK_ID_ESCALATION, check_and_escalate_all, "Escalation check")
@@ -103,17 +107,17 @@ def _run_email_retry() -> None:
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
+
 def start_scheduler() -> None:
     global _scheduler
     _scheduler = BackgroundScheduler(
         timezone="UTC",
         job_defaults={
-            "coalesce": True,       # if a job was missed multiple times, run it once
-            "max_instances": 1,     # never overlap
+            "coalesce": True,  # if a job was missed multiple times, run it once
+            "max_instances": 1,  # never overlap
             "misfire_grace_time": 300,
         },
     )
-    
 
     _scheduler.add_job(
         _run_escalation_check,
@@ -132,10 +136,13 @@ def start_scheduler() -> None:
 
     _scheduler.start()
     mode = "TEST" if TEST_MODE else "PRODUCTION"
-    dev  = " + DEV_MODE (no advisory lock)" if DEV_MODE else ""
+    dev = " + DEV_MODE (no advisory lock)" if DEV_MODE else ""
     logger.info(
         "Scheduler started [%s%s] — escalation every %dmin, email retry every %dmin",
-        mode, dev, CHECK_INTERVAL_MINUTES, RETRY_INTERVAL_MINUTES,
+        mode,
+        dev,
+        CHECK_INTERVAL_MINUTES,
+        RETRY_INTERVAL_MINUTES,
     )
     for job in _scheduler.get_jobs():
         logger.info("Scheduled: %s — next run at %s", job.name, job.next_run_time)

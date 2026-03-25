@@ -34,8 +34,8 @@ from sqlalchemy.orm import Session
 from app.models.complaint_audit_log import ComplaintAuditLog
 from app.services.utils.datetime_utils import utc_now
 
-
 # ─── Shared entry builder ─────────────────────────────────────────────────────
+
 
 def _build_entry(
     *,
@@ -60,6 +60,7 @@ def _build_entry(
 
 
 # ─── Async core ───────────────────────────────────────────────────────────────
+
 
 async def log_event(
     db: AsyncSession,
@@ -95,6 +96,7 @@ async def log_event(
 
 # ─── Sync core ────────────────────────────────────────────────────────────────
 
+
 def log_event_sync(
     db: Session,
     *,
@@ -127,6 +129,7 @@ def log_event_sync(
 # ═══════════════════════════════════════════════════════════════════════════════
 # ASYNC typed helpers
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 async def log_complaint_created(
     db: AsyncSession,
@@ -366,6 +369,7 @@ async def log_comment_added(
 
 # FIX ⑨: log_complaint_created_sync and log_report_created_sync were missing —
 # every other helper had a sync twin; added here for completeness.
+
 
 def log_complaint_created_sync(
     db: Session,

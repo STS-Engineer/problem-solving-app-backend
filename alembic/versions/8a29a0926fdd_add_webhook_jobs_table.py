@@ -5,15 +5,15 @@ Revises: 63fbace0634c
 Create Date: 2026-03-13 09:54:34.326139
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
 
-
 # revision identifiers, used by Alembic.
-revision: str = '8a29a0926fdd'
-down_revision: Union[str, Sequence[str], None] = '63fbace0634c'
+revision: str = "8a29a0926fdd"
+down_revision: Union[str, Sequence[str], None] = "63fbace0634c"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -48,26 +48,25 @@ def upgrade() -> None:
             server_default="complaint.created",
         ),
         sa.Column("target_url", sa.String(2048), nullable=False),
-
         # 👇 IMPORTANT : utiliser le type PostgreSQL existant
         sa.Column(
             "status",
-            sa.dialects.postgresql.ENUM(
-                name="webhook_status_enum",
-                create_type=False
-            ),
+            sa.dialects.postgresql.ENUM(name="webhook_status_enum", create_type=False),
             nullable=False,
-            server_default="pending"
+            server_default="pending",
         ),
-
         sa.Column("attempt", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("max_attempts", sa.Integer(), nullable=False, server_default="3"),
         sa.Column("retry_after", sa.DateTime(), nullable=True),
         sa.Column("payload_json", sa.Text(), nullable=False),
         sa.Column("last_http_status", sa.Integer(), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(), nullable=False, server_default=sa.func.now()
+        ),
     )
 
     op.create_index(

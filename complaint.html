@@ -1,0 +1,1030 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Complaints Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <style>
+      /* ── Reset & tokens ───────────────────────────────────────── */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      :root {
+        --bg: #0d0f14;
+        --surface: #161920;
+        --border: #252830;
+        --accent: #f0a500;
+        --accent2: #e05c3a;
+        --accent3: #3ab8e0;
+        --text: #e8eaf0;
+        --muted: #6b7080;
+        --open-col: #3ab8e0;
+        --closed-col: #f0a500;
+        --font-head: "Bebas Neue", Impact, sans-serif;
+        --font-body: "DM Mono", "Courier New", monospace;
+        --radius: 6px;
+      }
+
+      @import url("https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap");
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-body);
+        font-size: 13px;
+        min-height: 100vh;
+      }
+
+      /* ── Top bar ──────────────────────────────────────────────── */
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 18px 32px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+      }
+      header h1 {
+        font-family: var(--font-head);
+        font-size: 2rem;
+        letter-spacing: 3px;
+        color: var(--accent);
+      }
+      header small {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      #sync-time {
+        color: var(--muted);
+        font-size: 11px;
+        text-align: right;
+      }
+
+      /* ── Upload banner ────────────────────────────────────────── */
+      #upload-zone {
+        margin: 32px auto;
+        max-width: 560px;
+        border: 2px dashed var(--border);
+        border-radius: var(--radius);
+        padding: 40px 24px;
+        text-align: center;
+        cursor: pointer;
+        transition:
+          border-color 0.2s,
+          background 0.2s;
+      }
+      #upload-zone:hover,
+      #upload-zone.drag-over {
+        border-color: var(--accent);
+        background: rgba(240, 165, 0, 0.06);
+      }
+      #upload-zone p {
+        color: var(--muted);
+        margin-top: 8px;
+        font-size: 12px;
+      }
+      #upload-zone svg {
+        display: block;
+        margin: 0 auto 12px;
+      }
+      #file-input {
+        display: none;
+      }
+      .btn {
+        display: inline-block;
+        margin-top: 14px;
+        padding: 8px 22px;
+        background: var(--accent);
+        color: #000;
+        border: none;
+        border-radius: var(--radius);
+        font-family: var(--font-head);
+        font-size: 1rem;
+        letter-spacing: 1px;
+        cursor: pointer;
+      }
+      .btn:hover {
+        opacity: 0.85;
+      }
+
+      /* ── Demo banner ──────────────────────────────────────────── */
+      #demo-btn {
+        display: block;
+        text-align: center;
+        margin: -10px auto 32px;
+        color: var(--accent3);
+        font-size: 12px;
+        cursor: pointer;
+        text-decoration: underline;
+      }
+
+      /* ── Main grid ────────────────────────────────────────────── */
+      #dashboard {
+        display: none;
+        padding: 28px 32px;
+      }
+
+      /* stat cards */
+      .stats-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 16px;
+        margin-bottom: 28px;
+      }
+      .stat-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 18px 16px;
+        position: relative;
+        overflow: hidden;
+      }
+      .stat-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 3px;
+        height: 100%;
+        background: var(--accent);
+      }
+      .stat-card.blue::before {
+        background: var(--accent3);
+      }
+      .stat-card.red::before {
+        background: var(--accent2);
+      }
+      .stat-card label {
+        display: block;
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+      }
+      .stat-card .val {
+        font-family: var(--font-head);
+        font-size: 2.2rem;
+        line-height: 1;
+        color: var(--text);
+      }
+
+      /* chart row */
+      .charts-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 16px;
+        margin-bottom: 28px;
+      }
+      @media (max-width: 900px) {
+        .charts-row {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+      @media (max-width: 600px) {
+        .charts-row {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .chart-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 18px;
+      }
+      .chart-card h3 {
+        font-family: var(--font-head);
+        font-size: 1rem;
+        letter-spacing: 2px;
+        color: var(--muted);
+        margin-bottom: 14px;
+      }
+      .chart-card canvas {
+        max-height: 220px;
+      }
+
+      /* filters */
+      .filter-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 20px;
+        align-items: center;
+      }
+      .filter-row select,
+      .filter-row input {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--text);
+        font-family: var(--font-body);
+        font-size: 12px;
+        padding: 6px 10px;
+        outline: none;
+      }
+      .filter-row select:focus,
+      .filter-row input:focus {
+        border-color: var(--accent);
+      }
+      .filter-row label {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      #clear-filter {
+        background: none;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        border-radius: var(--radius);
+        font-size: 12px;
+        padding: 6px 12px;
+        cursor: pointer;
+        font-family: var(--font-body);
+      }
+      #clear-filter:hover {
+        color: var(--text);
+        border-color: var(--accent2);
+      }
+
+      /* table */
+      .table-wrap {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      thead th {
+        background: var(--bg);
+        padding: 10px 14px;
+        text-align: left;
+        font-size: 10px;
+        letter-spacing: 1.4px;
+        text-transform: uppercase;
+        color: var(--muted);
+        border-bottom: 1px solid var(--border);
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+      }
+      thead th:hover {
+        color: var(--accent);
+      }
+      thead th.sorted {
+        color: var(--accent);
+      }
+      tbody tr {
+        border-bottom: 1px solid var(--border);
+        transition: background 0.12s;
+      }
+      tbody tr:last-child {
+        border-bottom: none;
+      }
+      tbody tr:hover {
+        background: rgba(255, 255, 255, 0.03);
+      }
+      tbody td {
+        padding: 9px 14px;
+        vertical-align: top;
+        max-width: 260px;
+      }
+      .truncate {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: block;
+        max-width: 240px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 20px;
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+      }
+      .badge.open {
+        background: rgba(58, 184, 224, 0.15);
+        color: var(--open-col);
+      }
+      .badge.closed {
+        background: rgba(240, 165, 0, 0.15);
+        color: var(--closed-col);
+      }
+
+      /* pagination */
+      .pagination {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        border-top: 1px solid var(--border);
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .pag-btns button {
+        background: none;
+        border: 1px solid var(--border);
+        color: var(--text);
+        font-family: var(--font-body);
+        font-size: 12px;
+        padding: 4px 12px;
+        border-radius: var(--radius);
+        cursor: pointer;
+        margin-left: 4px;
+      }
+      .pag-btns button:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .pag-btns button:disabled {
+        opacity: 0.3;
+        cursor: default;
+      }
+
+      /* modal */
+      #modal-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        z-index: 100;
+        align-items: center;
+        justify-content: center;
+      }
+      #modal-overlay.open {
+        display: flex;
+      }
+      #modal {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        max-width: 680px;
+        width: 94%;
+        max-height: 85vh;
+        overflow-y: auto;
+        padding: 28px 28px 20px;
+      }
+      #modal h2 {
+        font-family: var(--font-head);
+        font-size: 1.6rem;
+        color: var(--accent);
+        margin-bottom: 18px;
+        letter-spacing: 2px;
+      }
+      .detail-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px 20px;
+      }
+      .detail-item label {
+        display: block;
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 1.2px;
+        text-transform: uppercase;
+        margin-bottom: 3px;
+      }
+      .detail-item .dval {
+        color: var(--text);
+        word-break: break-word;
+      }
+      .full-width {
+        grid-column: 1 / -1;
+      }
+      #modal-close {
+        margin-top: 22px;
+        display: block;
+        text-align: right;
+        background: none;
+        border: none;
+        color: var(--muted);
+        font-family: var(--font-body);
+        font-size: 12px;
+        cursor: pointer;
+      }
+      #modal-close:hover {
+        color: var(--accent2);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>COMPLAINTS DASHBOARD</h1>
+        <small>Monday.com → JSON export viewer</small>
+      </div>
+      <div id="sync-time"></div>
+    </header>
+
+    <!-- Upload zone -->
+    <div
+      id="upload-zone"
+      onclick="document.getElementById('file-input').click()"
+    >
+      <input type="file" id="file-input" accept=".json" />
+      <svg
+        width="44"
+        height="44"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="#f0a500"
+        stroke-width="1.5"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
+        />
+      </svg>
+      <strong>Drop your <code>complaints_data.json</code> here</strong>
+      <p>or click to browse</p>
+      <button
+        class="btn"
+        onclick="
+          event.stopPropagation();
+          document.getElementById('file-input').click();
+        "
+      >
+        LOAD FILE
+      </button>
+    </div>
+    <a id="demo-btn" onclick="loadDemo()">▶ Load demo data instead</a>
+
+    <!-- Dashboard -->
+    <div id="dashboard">
+      <div class="stats-row" id="stats-row"></div>
+      <div class="charts-row" id="charts-row"></div>
+
+      <div class="filter-row">
+        <label>PLANT</label>
+        <select id="f-plant">
+          <option value="">All</option>
+        </select>
+        <label>LINE</label>
+        <select id="f-line">
+          <option value="">All</option>
+        </select>
+        <label>STATUS</label>
+        <select id="f-status">
+          <option value="">All</option>
+          <option value="open">Open</option>
+          <option value="closed">Closed</option>
+        </select>
+        <input
+          id="f-search"
+          placeholder="Search complaint name…"
+          style="min-width: 200px"
+        />
+        <button id="clear-filter" onclick="clearFilters()">✕ Clear</button>
+        <span
+          id="filter-count"
+          style="color: var(--muted); font-size: 11px; margin-left: auto"
+        ></span>
+      </div>
+
+      <div class="table-wrap">
+        <table id="complaints-table">
+          <thead>
+            <tr>
+              <th onclick="sortBy('complaint_name')">Complaint</th>
+              <th onclick="sortBy('avocarbon_plant')">Plant</th>
+              <th onclick="sortBy('product_line')">Product Line</th>
+              <th onclick="sortBy('customer')">Customer</th>
+              <th onclick="sortBy('complaint_opening_date')">Opening Date</th>
+              <th onclick="sortBy('status')">Status</th>
+              <th onclick="sortBy('repetitive_complete_with_number')">
+                Repeat #
+              </th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+        <div class="pagination">
+          <span id="pag-info"></span>
+          <div class="pag-btns">
+            <button id="pag-prev" onclick="changePage(-1)">← Prev</button>
+            <button id="pag-next" onclick="changePage(1)">Next →</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Detail Modal -->
+    <div id="modal-overlay" onclick="closeModal(event)">
+      <div id="modal">
+        <h2 id="modal-title"></h2>
+        <div class="detail-grid" id="modal-body"></div>
+        <button id="modal-close" onclick="closeModal()">✕ Close</button>
+      </div>
+    </div>
+
+    <script>
+      // ── State ──────────────────────────────────────────────────────────────
+      let ALL_DATA = [];
+      let filtered = [];
+      let sortKey = "complaint_opening_date";
+      let sortAsc = false;
+      let currentPage = 1;
+      const PAGE_SIZE = 15;
+
+      // Chart instances
+      let charts = {};
+
+      // ── File load ──────────────────────────────────────────────────────────
+      document.getElementById("file-input").addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          try {
+            const json = JSON.parse(ev.target.result);
+            ingest(json);
+          } catch {
+            alert("Invalid JSON file.");
+          }
+        };
+        reader.readAsText(file);
+      });
+
+      // Drag-and-drop
+      const zone = document.getElementById("upload-zone");
+      zone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        zone.classList.add("drag-over");
+      });
+      zone.addEventListener("dragleave", () =>
+        zone.classList.remove("drag-over"),
+      );
+      zone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        zone.classList.remove("drag-over");
+        const file = e.dataTransfer.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          try {
+            ingest(JSON.parse(ev.target.result));
+          } catch {
+            alert("Invalid JSON file.");
+          }
+        };
+        reader.readAsText(file);
+      });
+
+      // ── Demo data ──────────────────────────────────────────────────────────
+      function loadDemo() {
+        const plants = [
+          "MONTERREY",
+          "KUNSHAN",
+          "CHENNAI",
+          "FRANKFURT",
+          "POITIERS",
+          "AMIENS",
+          "TIANJIN",
+        ];
+        const lines = ["ASSEMBLY", "BRUSH", "CHOKE", "SEAL", "FRICTION"];
+        const custs = [
+          "Bosch",
+          "Continental",
+          "Valeo",
+          "ZF",
+          "Denso",
+          "Delphi",
+          "Mahle",
+        ];
+        const apps = [
+          "EV Motor",
+          "Brake System",
+          "Steering",
+          "HVAC",
+          "Powertrain",
+        ];
+        function rnd(arr) {
+          return arr[Math.floor(Math.random() * arr.length)];
+        }
+        function rndDate(start, end) {
+          const t = new Date(
+            start.getTime() + Math.random() * (end.getTime() - start.getTime()),
+          );
+          return t.toISOString().split("T")[0];
+        }
+
+        const complaints = Array.from({ length: 72 }, (_, i) => ({
+          monday_item_id: 1000 + i,
+          complaint_name: `COMP-${String(i + 1).padStart(4, "0")}`,
+          avocarbon_plant: rnd(plants),
+          product_line: rnd(lines),
+          customer: rnd(custs),
+          customer_plant_name: `${rnd(custs)} Plant ${rnd(["A", "B", "C"])}`,
+          status: Math.random() > 0.35 ? "open" : "closed",
+          complaint_opening_date: rndDate(new Date("2023-01-01"), new Date()),
+          customer_complaint_date: rndDate(new Date("2023-01-01"), new Date()),
+          repetitive_complete_with_number:
+            Math.random() > 0.6 ? String(Math.floor(Math.random() * 4)) : "0",
+          complaint_description: `Issue observed during production run. Quality deviation detected in batch ${Math.floor(Math.random() * 9000 + 1000)}.`,
+          concerned_application: rnd(apps),
+          defects: rnd([
+            "Dimensional",
+            "Surface finish",
+            "Material",
+            "Assembly",
+            "Contamination",
+          ]),
+          quality_issue_warranty:
+            Math.random() > 0.5 ? "Warranty" : "Quality Issue",
+          reported_by: 1,
+        }));
+
+        ingest({
+          synced_at: new Date().toISOString(),
+          board_id: "6514087061",
+          group: "Open",
+          count: complaints.length,
+          complaints,
+        });
+      }
+
+      // ── Ingest ─────────────────────────────────────────────────────────────
+      function ingest(json) {
+        const complaints = Array.isArray(json) ? json : json.complaints || [];
+        if (!complaints.length) {
+          alert("No complaints found in file.");
+          return;
+        }
+
+        ALL_DATA = complaints;
+
+        // Sync time
+        if (json.synced_at) {
+          document.getElementById("sync-time").innerHTML =
+            `Board: <b>${json.board_id || "–"}</b><br>Synced: ${new Date(json.synced_at).toLocaleString()}`;
+        }
+
+        // Populate filter dropdowns
+        populate(
+          "f-plant",
+          [
+            ...new Set(ALL_DATA.map((d) => d.avocarbon_plant).filter(Boolean)),
+          ].sort(),
+        );
+        populate(
+          "f-line",
+          [
+            ...new Set(ALL_DATA.map((d) => d.product_line).filter(Boolean)),
+          ].sort(),
+        );
+
+        // Hide upload, show dashboard
+        document.getElementById("upload-zone").style.display = "none";
+        document.getElementById("demo-btn").style.display = "none";
+        document.getElementById("dashboard").style.display = "block";
+
+        applyFilters();
+        renderCharts();
+      }
+
+      function populate(id, options) {
+        const sel = document.getElementById(id);
+        sel.innerHTML = '<option value="">All</option>';
+        options.forEach((o) => {
+          const opt = document.createElement("option");
+          opt.value = o;
+          opt.textContent = o;
+          sel.appendChild(opt);
+        });
+      }
+
+      // ── Filters ────────────────────────────────────────────────────────────
+      ["f-plant", "f-line", "f-status", "f-search"].forEach((id) =>
+        document.getElementById(id).addEventListener("input", () => {
+          currentPage = 1;
+          applyFilters();
+        }),
+      );
+
+      function clearFilters() {
+        ["f-plant", "f-line", "f-status"].forEach(
+          (id) => (document.getElementById(id).value = ""),
+        );
+        document.getElementById("f-search").value = "";
+        currentPage = 1;
+        applyFilters();
+      }
+
+      function applyFilters() {
+        const plant = document.getElementById("f-plant").value;
+        const line = document.getElementById("f-line").value;
+        const status = document.getElementById("f-status").value;
+        const search = document.getElementById("f-search").value.toLowerCase();
+
+        filtered = ALL_DATA.filter((d) => {
+          if (plant && d.avocarbon_plant !== plant) return false;
+          if (line && d.product_line !== line) return false;
+          if (status && d.status !== status) return false;
+          if (
+            search &&
+            !(d.complaint_name || "").toLowerCase().includes(search) &&
+            !(d.customer || "").toLowerCase().includes(search)
+          )
+            return false;
+          return true;
+        });
+
+        // sort
+        filtered.sort((a, b) => {
+          const va = a[sortKey] || "",
+            vb = b[sortKey] || "";
+          return sortAsc ? (va > vb ? 1 : -1) : va < vb ? 1 : -1;
+        });
+
+        document.getElementById("filter-count").textContent =
+          `${filtered.length} / ${ALL_DATA.length} complaints`;
+
+        renderStats();
+        renderTable();
+      }
+
+      function sortBy(key) {
+        if (sortKey === key) sortAsc = !sortAsc;
+        else {
+          sortKey = key;
+          sortAsc = true;
+        }
+        document
+          .querySelectorAll("thead th")
+          .forEach((th) => th.classList.remove("sorted"));
+        applyFilters();
+      }
+
+      // ── Stats ──────────────────────────────────────────────────────────────
+      function renderStats() {
+        const open = filtered.filter((d) => d.status === "open").length;
+        const closed = filtered.filter((d) => d.status === "closed").length;
+        const rep = filtered.filter(
+          (d) => Number(d.repetitive_complete_with_number) > 0,
+        ).length;
+        const plants = new Set(
+          filtered.map((d) => d.avocarbon_plant).filter(Boolean),
+        ).size;
+
+        document.getElementById("stats-row").innerHTML = `
+    <div class="stat-card blue">
+      <label>Total</label><div class="val">${filtered.length}</div>
+    </div>
+    <div class="stat-card blue">
+      <label>Open</label><div class="val" style="color:var(--open-col)">${open}</div>
+    </div>
+    <div class="stat-card">
+      <label>Closed</label><div class="val" style="color:var(--accent)">${closed}</div>
+    </div>
+    <div class="stat-card red">
+      <label>Repetitive</label><div class="val" style="color:var(--accent2)">${rep}</div>
+    </div>
+    <div class="stat-card">
+      <label>Plants</label><div class="val">${plants}</div>
+    </div>
+  `;
+      }
+
+      // ── Table ──────────────────────────────────────────────────────────────
+      function renderTable() {
+        const tbody = document.getElementById("table-body");
+        const start = (currentPage - 1) * PAGE_SIZE;
+        const page = filtered.slice(start, start + PAGE_SIZE);
+
+        if (!page.length) {
+          tbody.innerHTML =
+            '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:32px">No complaints match filters</td></tr>';
+        } else {
+          tbody.innerHTML = page
+            .map(
+              (d, i) => `
+      <tr style="cursor:pointer" onclick="openModal(${start + i})">
+        <td><span class="truncate" title="${esc(d.complaint_name)}">${esc(d.complaint_name) || "—"}</span></td>
+        <td>${esc(d.avocarbon_plant) || "—"}</td>
+        <td>${esc(d.product_line) || "—"}</td>
+        <td><span class="truncate">${esc(d.customer) || "—"}</span></td>
+        <td>${d.complaint_opening_date || "—"}</td>
+        <td><span class="badge ${d.status || "open"}">${d.status || "open"}</span></td>
+        <td style="text-align:center">${d.repetitive_complete_with_number || "0"}</td>
+      </tr>
+    `,
+            )
+            .join("");
+        }
+
+        const total = filtered.length;
+        const pages = Math.ceil(total / PAGE_SIZE) || 1;
+        document.getElementById("pag-info").textContent =
+          `Page ${currentPage} of ${pages} (${total} records)`;
+        document.getElementById("pag-prev").disabled = currentPage <= 1;
+        document.getElementById("pag-next").disabled = currentPage >= pages;
+      }
+
+      function changePage(dir) {
+        const pages = Math.ceil(filtered.length / PAGE_SIZE) || 1;
+        currentPage = Math.max(1, Math.min(pages, currentPage + dir));
+        renderTable();
+      }
+
+      // ── Charts ─────────────────────────────────────────────────────────────
+      function renderCharts() {
+        document.getElementById("charts-row").innerHTML = `
+    <div class="chart-card"><h3>BY PLANT</h3><canvas id="c-plant"></canvas></div>
+    <div class="chart-card"><h3>BY PRODUCT LINE</h3><canvas id="c-line"></canvas></div>
+    <div class="chart-card"><h3>STATUS SPLIT</h3><canvas id="c-status"></canvas></div>
+  `;
+
+        const palette = [
+          "#f0a500",
+          "#3ab8e0",
+          "#e05c3a",
+          "#7cc47c",
+          "#c47ca0",
+          "#7ca0c4",
+          "#c4b47c",
+          "#a07cc4",
+          "#7cc4b4",
+          "#c47c7c",
+        ];
+
+        // plant bar
+        const plantCounts = countBy(ALL_DATA, "avocarbon_plant");
+        makeBar(
+          "c-plant",
+          Object.keys(plantCounts),
+          Object.values(plantCounts),
+          palette,
+        );
+
+        // product line bar
+        const lineCounts = countBy(ALL_DATA, "product_line");
+        makeBar(
+          "c-line",
+          Object.keys(lineCounts),
+          Object.values(lineCounts),
+          palette.slice(2),
+        );
+
+        // status doughnut
+        const open = ALL_DATA.filter((d) => d.status === "open").length;
+        const closed = ALL_DATA.filter((d) => d.status === "closed").length;
+        makeDoughnut(
+          "c-status",
+          ["Open", "Closed"],
+          [open, closed],
+          ["#3ab8e0", "#f0a500"],
+        );
+      }
+
+      function countBy(data, key) {
+        return data.reduce((acc, d) => {
+          const k = d[key] || "Unknown";
+          acc[k] = (acc[k] || 0) + 1;
+          return acc;
+        }, {});
+      }
+
+      const CHART_DEFAULTS = {
+        plugins: { legend: { display: false } },
+        scales: {
+          x: {
+            ticks: { color: "#6b7080", font: { size: 10 } },
+            grid: { color: "#252830" },
+          },
+          y: {
+            ticks: { color: "#6b7080", font: { size: 10 } },
+            grid: { color: "#252830" },
+          },
+        },
+      };
+
+      function makeBar(id, labels, data, colors) {
+        new Chart(document.getElementById(id), {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [
+              {
+                data,
+                backgroundColor: labels.map(
+                  (_, i) => colors[i % colors.length],
+                ),
+                borderRadius: 3,
+              },
+            ],
+          },
+          options: {
+            ...CHART_DEFAULTS,
+            responsive: true,
+            maintainAspectRatio: true,
+          },
+        });
+      }
+
+      function makeDoughnut(id, labels, data, colors) {
+        new Chart(document.getElementById(id), {
+          type: "doughnut",
+          data: {
+            labels,
+            datasets: [{ data, backgroundColor: colors, borderWidth: 0 }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+              legend: {
+                display: true,
+                position: "bottom",
+                labels: { color: "#e8eaf0", font: { size: 11 }, boxWidth: 12 },
+              },
+            },
+            cutout: "62%",
+          },
+        });
+      }
+
+      // ── Modal ──────────────────────────────────────────────────────────────
+      function openModal(idx) {
+        const d = filtered[idx];
+        if (!d) return;
+        document.getElementById("modal-title").textContent =
+          d.complaint_name || "Complaint Detail";
+
+        const fields = [
+          ["Plant", d.avocarbon_plant],
+          ["Product Line", d.product_line],
+          [
+            "Status",
+            `<span class="badge ${d.status || "open"}">${d.status || "open"}</span>`,
+          ],
+          ["Customer", d.customer],
+          ["Customer Plant", d.customer_plant_name],
+          ["Opening Date", d.complaint_opening_date],
+          ["Customer Date", d.customer_complaint_date],
+          ["Repetitive #", d.repetitive_complete_with_number],
+          ["Application", d.concerned_application],
+          ["Defects", d.defects],
+          ["Quality/Warranty", d.quality_issue_warranty],
+          ["Quality Manager", d.quality_manager_email],
+          ["Plant Manager", d.plant_manager_email],
+          ["Monday ID", d.monday_item_id],
+          ["Description", d.complaint_description, true],
+          [
+            "Process Linked",
+            d.potential_avocarbon_process_linked_to_problem,
+            true,
+          ],
+          ["Product Type", d.avocarbon_product_type, true],
+        ].filter((f) => f[1]);
+
+        document.getElementById("modal-body").innerHTML = fields
+          .map(
+            ([label, val, full]) =>
+              `<div class="detail-item ${full ? "full-width" : ""}">
+       <label>${label}</label>
+       <div class="dval">${val}</div>
+     </div>`,
+          )
+          .join("");
+
+        document.getElementById("modal-overlay").classList.add("open");
+      }
+
+      function closeModal(e) {
+        if (
+          !e ||
+          e.target === document.getElementById("modal-overlay") ||
+          e.currentTarget.id === "modal-close"
+        ) {
+          document.getElementById("modal-overlay").classList.remove("open");
+        }
+      }
+
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape")
+          closeModal({ target: document.getElementById("modal-overlay") });
+      });
+
+      // ── Utils ──────────────────────────────────────────────────────────────
+      function esc(str) {
+        if (!str) return "";
+        return String(str)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+    </script>
+  </body>
+</html>

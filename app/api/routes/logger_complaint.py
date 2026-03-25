@@ -30,9 +30,9 @@ _SLA_HOURS: dict[str, int] = {
     "D1": 24,
     "D2": 72,
     "D3": 24,
-    "D4": 168,   # 7 days
-    "D5": 336,   # 14 days
-    "D6": 720,   # 30 days
+    "D4": 168,  # 7 days
+    "D5": 336,  # 14 days
+    "D6": 720,  # 30 days
     "D7": 1080,  # 45 days
     "D8": 1440,  # 60 days
 }
@@ -43,6 +43,7 @@ def _sla_hours(code: str) -> int:
 
 
 # ─── Serialisers ──────────────────────────────────────────────────────────────
+
 
 def _build_step_summary(steps: list[ReportStep]) -> list[StepSummary]:
     return [
@@ -78,6 +79,7 @@ def _serialize_log(log: ComplaintAuditLog) -> AuditLogEntry:
 
 # ─── GET /logger ──────────────────────────────────────────────────────────────
 
+
 @router.get("/", response_model=ComplaintLoggerListResponse)
 async def list_complaints_for_logger(
     search: str | None = Query(None),
@@ -85,7 +87,9 @@ async def list_complaints_for_logger(
     plant: str | None = Query(None),
     priority: str | None = Query(None),
     customer: str | None = Query(None),
-    has_escalation: bool | None = Query(None, description="Filter complaints that have at least one escalation"),
+    has_escalation: bool | None = Query(
+        None, description="Filter complaints that have at least one escalation"
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_async_db),
@@ -125,9 +129,7 @@ async def list_complaints_for_logger(
         base_q = base_q.where(Complaint.priority == priority)
 
     # Count before pagination
-    count_result = await db.execute(
-        select(func.count()).select_from(base_q.subquery())
-    )
+    count_result = await db.execute(select(func.count()).select_from(base_q.subquery()))
     total: int = count_result.scalar_one()
 
     paged_q = base_q.offset((page - 1) * page_size).limit(page_size)
@@ -139,7 +141,8 @@ async def list_complaints_for_logger(
         steps = c.report.steps if c.report else []
         last_log = (
             max((lg.created_at for lg in c.audit_logs), default=None)
-            if c.audit_logs else None
+            if c.audit_logs
+            else None
         )
         total_esc = sum(s.escalation_count or 0 for s in steps)
 
@@ -181,6 +184,7 @@ async def list_complaints_for_logger(
 
 # ─── GET /{complaint_id}/logs ─────────────────────────────────────────────────
 
+
 @router.get("/{complaint_id}/logs", response_model=ComplaintLogsResponse)
 async def get_complaint_logs(
     complaint_id: int,
@@ -190,9 +194,7 @@ async def get_complaint_logs(
 ) -> ComplaintLogsResponse:
     """Full ordered audit log for a single complaint, optionally filtered."""
 
-    c_result = await db.execute(
-        select(Complaint).where(Complaint.id == complaint_id)
-    )
+    c_result = await db.execute(select(Complaint).where(Complaint.id == complaint_id))
     complaint = c_result.scalar_one_or_none()
     if not complaint:
         raise HTTPException(status_code=404, detail="Complaint not found")
@@ -219,6 +221,7 @@ async def get_complaint_logs(
 
 
 # ─── GET /{complaint_id}/logs/steps ──────────────────────────────────────────
+
 
 @router.get("/{complaint_id}/logs/steps", response_model=StepLogsResponse)
 async def get_complaint_step_logs(

@@ -8,6 +8,13 @@ from .kb_chunk import KBChunk
 from .complaint_audit_log import ComplaintAuditLog
 
 __all__ = [
-    "User", "Complaint", "Report", "ReportStep",
-    "StepValidation", "File", "StepFile", "KBChunk","ComplaintAuditLog"
+    "User",
+    "Complaint",
+    "Report",
+    "ReportStep",
+    "StepValidation",
+    "File",
+    "StepFile",
+    "KBChunk",
+    "ComplaintAuditLog",
 ]

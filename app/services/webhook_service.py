@@ -31,310 +31,88 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.config import get_webhook_settings
-from app.core.email import _send_sync
-from app.db.session import SessionLocal
-from app.models.complaint import Complaint
-from app.models.webhook_model import WebhookJob, WebhookStatus
-
-log = logging.getLogger(__name__)
-
-BACKOFF_SECONDS = [0, 60, 600]   # delay before attempt 1, 2, 3+
-LOCKED_JOB_TTL_MINUTES = 10
+logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Snapshot dataclass — safe to use after DB session closes
-# ─────────────────────────────────────────────────────────────────────────────
-
-@dataclass
-class _JobSnapshot:
-    id:            int
-    complaint_ref: str
-    target_url:    str
-    event:         str
-    payload_json:  str
-    attempt:       int
-    max_attempts:  int
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Payload builders
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _complaint_dict(complaint: Complaint) -> dict[str, Any]:
-    return {
-        "id":                     complaint.id,
-        "reference_number":       complaint.reference_number,
-        "complaint_name":         complaint.complaint_name,
-        "quality_issue_warranty": complaint.quality_issue_warranty,
-        "customer":               complaint.customer,
-        "customer_plant_name":    complaint.customer_plant_name,
-        "avocarbon_plant": (
-            complaint.avocarbon_plant.value if complaint.avocarbon_plant else None
-        ),
-        "product_line": (
-            complaint.product_line.value if complaint.product_line else None
-        ),
-        "defects":        complaint.defects,
-        "repetition_count": _safe_int(complaint.repetitive_complete_with_number),
-        "priority":       complaint.priority,
-        "status":         complaint.status,
-        "complaint_opening_date": (
-            complaint.complaint_opening_date.isoformat()
-            if complaint.complaint_opening_date else None
-        ),
-        "due_date": (
-            complaint.due_date.isoformat() if complaint.due_date else None
-        ),
-        "cqt_email":             complaint.cqt_email,
-        "quality_manager_email": complaint.quality_manager_email,
-        "created_at": (
-            complaint.created_at.isoformat() if complaint.created_at else None
-        ),
-    }
-
-
-def _safe_int(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (ValueError, TypeError):
-        return 0
-
-
-def _build_payload(
-    event: str,
-    complaint: Complaint,
-    job_id: str,
-    extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    payload = {
-        "webhook_event": event,
-        "webhook_id":    job_id,
-        "triggered_at":  datetime.now(timezone.utc).isoformat(),
-        "complaint":     _complaint_dict(complaint),
-    }
-    if extra:
-        payload.update(extra)
-    return payload
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Signing & HTTP delivery
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _sign(secret: str, body: bytes) -> str:
-    if not secret:
-        return ""
-    return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-
-
-def _post(snapshot: _JobSnapshot, cfg) -> tuple[bool, int | None, str | None]:
-    body = snapshot.payload_json.encode("utf-8")
-    headers = {
-        "Content-Type":        "application/json",
-        "X-Webhook-Event":     snapshot.event,
-        "X-Webhook-Signature": _sign(cfg.webhook_secret, body),
-        "X-Delivery-Id":       str(uuid.uuid4()),
-        "X-Attempt-Number":    str(snapshot.attempt),
-        "User-Agent":          "AVOCarbon-Webhook/2.0",
-    }
-    try:
-        with httpx.Client(timeout=cfg.webhook_timeout_sec) as client:
-            resp = client.post(snapshot.target_url, content=body, headers=headers)
-        if resp.is_success:
-            return True, resp.status_code, None
-        return False, resp.status_code, f"HTTP {resp.status_code}"
-    except httpx.TimeoutException as exc:
-        return False, None, f"Timeout: {exc}"
-    except Exception as exc:
-        return False, None, str(exc)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Core enqueue helper
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _enqueue(
-    db: Session,
-    complaint: Complaint,
-    event: str,
-    payload_json: str,
-) -> int:
-    """
-    Insert one WebhookJob row per configured target URL.
-    Returns the number of jobs inserted.
-    Must be called BEFORE db.commit() so it rolls back with the complaint.
-    """
-    cfg = get_webhook_settings()
-    if not cfg.target_urls:
-        log.warning("WEBHOOK_TARGET not set — %s not enqueued for %s",
-                    event, complaint.reference_number)
-        return 0
-
-    for url in cfg.target_urls:
-        db.add(WebhookJob(
-            complaint_id   = complaint.id,
-            complaint_ref  = complaint.reference_number,
-            complaint_type = (complaint.quality_issue_warranty or "").strip(),
-            event          = event,
-            target_url     = url,
-            status         = WebhookStatus.pending,
-            attempt        = 0,
-            max_attempts   = cfg.webhook_max_attempts,
-            retry_after    = None,
-            payload_json   = payload_json,
-        ))
-
-    log.info("Enqueued %d %s job(s) for %s",
-             len(cfg.target_urls), event, complaint.reference_number)
-    return len(cfg.target_urls)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public API — three push events
-# ─────────────────────────────────────────────────────────────────────────────
-
-def enqueue_complaint_created(db: Session, complaint: Complaint) -> None:
-    """
-    Call inside create_complaint() BEFORE db.commit().
-    Only fires for CS1 and CS2 types.
-    """
-    cfg = get_webhook_settings()
-    complaint_type = (complaint.quality_issue_warranty or "").strip()
-
-    if complaint_type not in cfg.trigger_types:
-        log.debug("complaint.created skipped: %s type=%r not in trigger_types",
-                  complaint.reference_number, complaint_type)
-        return
-
-    job_id = str(uuid.uuid4())
-    payload_json = json.dumps(
-        _build_payload("complaint.created", complaint, job_id),
-        ensure_ascii=False, default=str,
-    )
-    _enqueue(db, complaint, "complaint.created", payload_json)
-
-
-def enqueue_type_updated(
-    db: Session,
-    complaint: Complaint,
-    old_type: str,
-    new_type: str,
-) -> None:
-    """
-    Call inside update_complaint() BEFORE db.commit(), when
-    quality_issue_warranty has changed.
-
-    Example:
-        old = complaint.quality_issue_warranty
-        complaint.quality_issue_warranty = new_value
-        if old != new_value:
-            enqueue_type_updated(db, complaint, old, new_value)
-    """
-    job_id = str(uuid.uuid4())
-    payload_json = json.dumps(
-        _build_payload(
-            "complaint.type_updated", complaint, job_id,
-            extra={"previous_type": old_type, "new_type": new_type},
-        ),
-        ensure_ascii=False, default=str,
-    )
-    _enqueue(db, complaint, "complaint.type_updated", payload_json)
-    log.info("complaint.type_updated enqueued: %s  %s → %s",
-             complaint.reference_number, old_type, new_type)
-
-
-def enqueue_complaint_cancelled(db: Session, complaint: Complaint) -> None:
-    """
-    Call inside cancel_complaint() / when status is set to 'rejected'
-    BEFORE db.commit().
-    """
-    job_id = str(uuid.uuid4())
-    payload_json = json.dumps(
-        _build_payload(
-            "complaint.cancelled", complaint, job_id,
-            extra={"cancelled_at": datetime.now(timezone.utc).isoformat()},
-        ),
-        ensure_ascii=False, default=str,
-    )
-    _enqueue(db, complaint, "complaint.cancelled", payload_json)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Delivery worker  (APScheduler every 2 min)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_one_poll() -> None:
-    snapshot = _claim_job()
-    if snapshot is None:
-        return
-    cfg = get_webhook_settings()
-    success, http_status, error = _post(snapshot, cfg)
-    _update_job(snapshot, success, http_status, error)
-
-
-def _claim_job() -> _JobSnapshot | None:
-    now = datetime.now(timezone.utc)
-    with SessionLocal() as db:
-        row = db.execute(
-            text("""
-                SELECT id FROM webhook_jobs
-                WHERE status = 'pending'
-                  AND (retry_after IS NULL OR retry_after <= :now)
-                ORDER BY created_at ASC
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED
-            """),
-            {"now": now},
-        ).fetchone()
-
-        if row is None:
-            return None
-
-        job = db.get(WebhookJob, row.id)
-        if job is None:
-            return None
-
-        job.status  = WebhookStatus.locked
-        job.attempt = (job.attempt or 0) + 1
-        db.commit()
-
-        return _JobSnapshot(
-            id            = job.id,
-            complaint_ref = job.complaint_ref,
-            target_url    = job.target_url,
-            event         = job.event,
-            payload_json  = job.payload_json,
-            attempt       = job.attempt,
-            max_attempts  = job.max_attempts,
-        )
-
-
-def _update_job(
-    snapshot: _JobSnapshot,
-    success: bool,
-    http_status: int | None,
-    error: str | None,
-) -> None:
-    with SessionLocal() as db:
-        job = db.get(WebhookJob, snapshot.id)
-        if job is None:
-            return
-
-        job.last_http_status = http_status
-        job.last_error       = error
-
-        try:
-            if success:
-                job.status = WebhookStatus.done
-                log.info("Webhook delivered [job=%d complaint=%s event=%s attempt=%d http=%d]",
-                         job.id, job.complaint_ref, job.event, job.attempt, http_status)
-
-            elif job.attempt >= job.max_attempts:
-                job.status = WebhookStatus.failed
-                log.error("Webhook abandoned [job=%d complaint=%s event=%s after %d attempts]: %s",
-                          job.id, job.complaint_ref, job.event, job.attempt, error)
+class WebhookService:
+    def __init__(self):
+        self.webhook_url = "https://your-app-a-url.com/api/webhooks/complaint-events"  # Configure via env
+        self.webhook_secret = "your-webhook-secret"  # Configure via env
+        self.max_retries = 3
+        self.timeout = 5.0
+    
+    async def send_webhook_async(
+        self, 
+        event_type: str, 
+        complaint_data: Dict[str, Any],
+        complaint_id: int,
+    ) -> bool:
+        """
+        Send webhook asynchronously with retry logic
+        Returns True if successful, False otherwise
+        """
+        payload = {
+            "event": event_type,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "data": complaint_data
+        }
+        
+        for attempt in range(self.max_retries):
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        self.webhook_url,
+                        json=payload,
+                        headers={
+                            "X-Webhook-Secret": self.webhook_secret,
+                            "Content-Type": "application/json"
+                        },
+                        timeout=self.timeout
+                    )
+                    
+                    if response.status_code == 200:
+                        logger.info(f"Webhook sent successfully: {event_type} for complaint {complaint_id}")
+                        return True
+                    else:
+                        logger.warning(
+                            f"Webhook failed with status {response.status_code}: "
+                            f"{event_type} for complaint {complaint_id} (attempt {attempt + 1}/{self.max_retries})"
+                        )
+                        
+            except Exception as e:
+                logger.error(
+                    f"Webhook error: {event_type} for complaint {complaint_id} "
+                    f"(attempt {attempt + 1}/{self.max_retries}): {str(e)}"
+                )
+            
+            # Exponential backoff: 1s, 2s, 4s
+            if attempt < self.max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+        
+        return False
+    
+    def send_webhook_background(
+        self,
+        event_type: str,
+        complaint_data: Dict[str, Any],
+        complaint_id: int,
+        db: Session
+    ):
+        """
+        Trigger webhook send in background (fire and forget)
+        Updates webhook tracking fields in database
+        """
+        async def _send_and_update():
+            from app.models.complaint import Complaint
+            
+            success = await self.send_webhook_async(event_type, complaint_data, complaint_id)
+            
+            # Update webhook tracking
+            complaint = db.query(Complaint).filter(Complaint.id == complaint_id).first()
+            if complaint:
+                complaint.webhook_sent = success
+                complaint.webhook_attempts += 1
+                complaint.last_webhook_attempt = datetime.now(timezone.utc)
                 db.commit()
                 _send_failure_email(snapshot, error)
                 return
@@ -421,4 +199,5 @@ def _send_failure_email(snapshot: _JobSnapshot, error: str | None) -> None:
         except Exception as exc:
             log.error("Failed to send alert email for job=%d: %s", snapshot.id, exc)
 
+webhook_service = WebhookService()
     threading.Thread(target=_fire, daemon=True).start()
