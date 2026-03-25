@@ -37,7 +37,7 @@ from openai import OpenAI, OpenAIError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.services.conversation_service import _merge_extracted  
+from app.services.conversation_service import _merge_extracted
 
 logger = logging.getLogger(__name__)
 
@@ -217,21 +217,22 @@ determine them. Do NOT add, remove, or rename any keys.
 
 _KEY_TO_STEP: Dict[str, str] = {
     # D2 — five_w_2h section
-    "problem_description":  "D2",
-    "five_w_2h":            "D2",
+    "problem_description": "D2",
+    "five_w_2h": "D2",
     # D2 — deviation section
-    "standard_applicable":  "D2",
-    "expected_situation":   "D2",
-    "observed_situation":   "D2",
+    "standard_applicable": "D2",
+    "expected_situation": "D2",
+    "observed_situation": "D2",
     # D3 — containment section
-    "defected_part_status":     "D3",
-    "suspected_parts_status":   "D3",
+    "defected_part_status": "D3",
+    "suspected_parts_status": "D3",
 }
 
 
 # =============================================================================
 # INTERNAL HELPERS
 # =============================================================================
+
 
 def _get(obj: Any, key: str, default: str = "") -> str:
     """
@@ -245,9 +246,9 @@ def _get(obj: Any, key: str, default: str = "") -> str:
 
     if val is None:
         return default
-    if hasattr(val, "value"):       # enum
+    if hasattr(val, "value"):  # enum
         return str(val.value)
-    if hasattr(val, "isoformat"):   # date / datetime
+    if hasattr(val, "isoformat"):  # date / datetime
         return val.isoformat()
     return str(val)
 
@@ -261,7 +262,8 @@ def _drop_empty(obj: Any) -> Any:
     if isinstance(obj, dict):
         cleaned = {k: _drop_empty(v) for k, v in obj.items()}
         return {
-            k: v for k, v in cleaned.items()
+            k: v
+            for k, v in cleaned.items()
             if not (v == "" or v is None or v == {} or v == [])
         }
     if isinstance(obj, list):
@@ -272,25 +274,27 @@ def _drop_empty(obj: Any) -> Any:
 
 def _build_user_message(complaint: Any) -> str:
     return _USER_TEMPLATE.format(
-        reference_number                          = _get(complaint, "reference_number"),
-        complaint_name                            = _get(complaint, "complaint_name"),
-        complaint_description                     = _get(complaint, "complaint_description"),
-        defects                                   = _get(complaint, "defects"),
-        quality_issue_warranty                    = _get(complaint, "quality_issue_warranty"),
-        repetitive_complete_with_number           = _get(complaint, "repetitive_complete_with_number"),
-        product_line                              = _get(complaint, "product_line"),
-        avocarbon_product_type                    = _get(complaint, "avocarbon_product_type"),
-        concerned_application                     = _get(complaint, "concerned_application"),
-        potential_avocarbon_process_linked_to_problem = _get(
+        reference_number=_get(complaint, "reference_number"),
+        complaint_name=_get(complaint, "complaint_name"),
+        complaint_description=_get(complaint, "complaint_description"),
+        defects=_get(complaint, "defects"),
+        quality_issue_warranty=_get(complaint, "quality_issue_warranty"),
+        repetitive_complete_with_number=_get(
+            complaint, "repetitive_complete_with_number"
+        ),
+        product_line=_get(complaint, "product_line"),
+        avocarbon_product_type=_get(complaint, "avocarbon_product_type"),
+        concerned_application=_get(complaint, "concerned_application"),
+        potential_avocarbon_process_linked_to_problem=_get(
             complaint, "potential_avocarbon_process_linked_to_problem"
         ),
-        customer                                  = _get(complaint, "customer"),
-        customer_plant_name                       = _get(complaint, "customer_plant_name"),
-        avocarbon_plant                           = _get(complaint, "avocarbon_plant"),
-        customer_complaint_date                   = _get(complaint, "customer_complaint_date"),
-        complaint_opening_date                    = _get(complaint, "complaint_opening_date"),
-        due_date                                  = _get(complaint, "due_date"),
-        priority                                  = _get(complaint, "priority"),
+        customer=_get(complaint, "customer"),
+        customer_plant_name=_get(complaint, "customer_plant_name"),
+        avocarbon_plant=_get(complaint, "avocarbon_plant"),
+        customer_complaint_date=_get(complaint, "customer_complaint_date"),
+        complaint_opening_date=_get(complaint, "complaint_opening_date"),
+        due_date=_get(complaint, "due_date"),
+        priority=_get(complaint, "priority"),
     )
 
 
@@ -334,20 +338,23 @@ def _route_to_steps(
             logger.warning("auto_fill: ReportStep id=%s not found in DB", step_id)
             continue
 
-        current      = step.data or {}
-        step.data    = _merge_extracted(current, payload)
+        current = step.data or {}
+        step.data = _merge_extracted(current, payload)
         step.updated_at = datetime.now(timezone.utc)
         db.flush()
 
         logger.info(
             "auto_fill: step %d (%s) <- %s",
-            step_id, step_code, list(payload.keys()),
+            step_id,
+            step_code,
+            list(payload.keys()),
         )
 
 
 # =============================================================================
 # PUBLIC ENTRY POINT
 # =============================================================================
+
 
 def auto_fill_from_complaint(
     db: Session,
@@ -375,22 +382,22 @@ def auto_fill_from_complaint(
             model=settings.OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": _SYSTEM},
-                {"role": "user",   "content": user_msg},
+                {"role": "user", "content": user_msg},
             ],
-            temperature=0.1,   # deterministic fact-based extraction
+            temperature=0.1,  # deterministic fact-based extraction
             max_completion_tokens=1500,
             timeout=30,
         )
-        
-        logger.info(
-            "system content  %s", _SYSTEM)
+
+        logger.info("system content  %s", _SYSTEM)
         logger.info("****************************")
         logger.info("user content    %s", user_msg)
         logger.info("****************************")
         raw = response.choices[0].message.content.strip()
-        logger.info("************************************************************************")
+        logger.info(
+            "************************************************************************"
+        )
         logger.info("raw LLM response: %s", raw)
-
 
         # Strip any accidental markdown code fences
         raw = re.sub(r"^```[a-z]*\s*", "", raw, flags=re.MULTILINE)
@@ -418,18 +425,21 @@ def auto_fill_from_complaint(
     except OpenAIError as exc:
         logger.warning(
             "auto_fill: OpenAI error [%s]: %s",
-            _get(complaint, "reference_number"), exc,
+            _get(complaint, "reference_number"),
+            exc,
         )
         return None
     except json.JSONDecodeError as exc:
         logger.warning(
             "auto_fill: JSON parse error [%s]: %s",
-            _get(complaint, "reference_number"), exc,
+            _get(complaint, "reference_number"),
+            exc,
         )
         return None
     except Exception as exc:
         logger.warning(
             "auto_fill: unexpected error [%s]: %s",
-            _get(complaint, "reference_number"), exc,
+            _get(complaint, "reference_number"),
+            exc,
         )
         return None

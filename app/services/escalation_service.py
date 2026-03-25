@@ -22,6 +22,7 @@ Outbox pattern:
   3b. Failure → outbox(failed) + exponential backoff next_retry_at
   4. retry_failed_emails() picks up failed + stuck-pending entries
 """
+
 from __future__ import annotations
 
 import logging
@@ -45,11 +46,12 @@ logger = logging.getLogger(__name__)
 COO_EMAIL = os.getenv("COO_EMAIL", "hayfa.rajhi@avocarbon.com")
 CEO_EMAIL = os.getenv("CEO_EMAIL", "hayfa.rajhi@avocarbon.com")
 
-_RETRY_BACKOFF_MINUTES       = [10, 30, 60]   # attempt 1→10min, 2→30min, 3+→60min
-_STUCK_PENDING_THRESHOLD_MINUTES = 45          # must be > scheduler check interval (30min)
+_RETRY_BACKOFF_MINUTES = [10, 30, 60]  # attempt 1→10min, 2→30min, 3+→60min
+_STUCK_PENDING_THRESHOLD_MINUTES = 45  # must be > scheduler check interval (30min)
 
 
 # ── Threshold helpers ─────────────────────────────────────────────────────────
+
 
 def _get_thresholds() -> list[tuple[float, int]]:
     """
@@ -59,7 +61,7 @@ def _get_thresholds() -> list[tuple[float, int]]:
     """
     if os.getenv("TEST_ESCALATION", "false").lower() == "true":
         m = 1 / 60  # 1 minute as a fraction of an hour
-        return [(2*m, 1), (4*m, 2), (6*m, 3), (8*m, 4)]
+        return [(2 * m, 1), (4 * m, 2), (6 * m, 3), (8 * m, 4)]
     return [(24.0, 1), (48.0, 2), (72.0, 3), (96.0, 4)]
 
 
@@ -73,11 +75,16 @@ def _hours_label(hours: float) -> str:
 
 # ── Domain helpers ────────────────────────────────────────────────────────────
 
+
 def _hours_overdue(step: ReportStep) -> float | None:
     """Returns hours overdue, or None if completed or not yet overdue."""
     if step.completed_at is not None or not step.due_date:
         return None
-    due = step.due_date if step.due_date.tzinfo else step.due_date.replace(tzinfo=timezone.utc)
+    due = (
+        step.due_date
+        if step.due_date.tzinfo
+        else step.due_date.replace(tzinfo=timezone.utc)
+    )
     delta = (datetime.now(timezone.utc) - due).total_seconds() / 3600
     return delta if delta > 0 else None
 
@@ -101,18 +108,30 @@ def _level_to_send(hours: float, already_sent: int) -> int | None:
 def _build_recipients(level: int, complaint: Complaint) -> list[str]:
     # FIX-5: always return a new list
     match level:
-        case 1: return [e for e in [complaint.quality_manager_email] if e]
-        case 2: return [e for e in [complaint.plant_manager_email] if e]
-        case 3: return [COO_EMAIL]
-        case 4: return [CEO_EMAIL]
-        case _: return []
+        case 1:
+            return [e for e in [complaint.quality_manager_email] if e]
+        case 2:
+            return [e for e in [complaint.plant_manager_email] if e]
+        case 3:
+            return [COO_EMAIL]
+        case 4:
+            return [CEO_EMAIL]
+        case _:
+            return []
 
 
 def _build_cc(level: int, complaint: Complaint) -> list[str] | None:
     # FIX-5: always return a new list
     match level:
         case 3:
-            cc = [e for e in [complaint.plant_manager_email, complaint.quality_manager_email] if e]
+            cc = [
+                e
+                for e in [
+                    complaint.plant_manager_email,
+                    complaint.quality_manager_email,
+                ]
+                if e
+            ]
             return cc or None
         case 4:
             return [COO_EMAIL]
@@ -141,7 +160,9 @@ def _build_email(
         plant_manager_email=complaint.plant_manager_email,
     )
 
+
 # ── Main jobs (called by scheduler.py) ───────────────────────────────────────
+
 
 def check_and_escalate_all(db: Session) -> None:
     """
@@ -169,7 +190,8 @@ def check_and_escalate_all(db: Session) -> None:
         except Exception:
             logger.exception(
                 "Escalation error on step_id=%s (%s) — rolling back, continuing",
-                step.id, step.step_code,
+                step.id,
+                step.step_code,
             )
             db.rollback()
 
@@ -194,8 +216,7 @@ def retry_failed_emails(db: Session) -> None:
                 & (EmailOutbox.attempts < EmailOutbox.max_attempts)
                 & (EmailOutbox.next_retry_at <= now)
             )
-            |
-            (
+            | (
                 (EmailOutbox.status == "pending")
                 & (EmailOutbox.created_at <= stuck_threshold)
             )
@@ -221,17 +242,21 @@ def retry_failed_emails(db: Session) -> None:
 
 # ── Step processing ───────────────────────────────────────────────────────────
 
+
 def _process_step(db: Session, step: ReportStep) -> bool:
     """
     Evaluate one step. Returns True if an outbox entry was created.
     escalation_count is NOT updated here — only on confirmed delivery (FIX-3).
     """
-    hours     = _hours_overdue(step)
+    hours = _hours_overdue(step)
     complaint = step.report.complaint
 
     logger.debug(
         "Step %s | %s | complaint=%s | due=%s | overdue=%s | escalation_count=%s | qm=%s | pm=%s",
-        step.id, step.step_code, complaint.reference_number, step.due_date,
+        step.id,
+        step.step_code,
+        complaint.reference_number,
+        step.due_date,
         f"{hours:.2f}h" if hours else "N/A",
         step.escalation_count,
         complaint.quality_manager_email,
@@ -239,14 +264,19 @@ def _process_step(db: Session, step: ReportStep) -> bool:
     )
 
     if hours is None:
-        logger.debug("Step %s (%s): not overdue or completed — skip", step.id, step.step_code)
+        logger.debug(
+            "Step %s (%s): not overdue or completed — skip", step.id, step.step_code
+        )
         return False
 
     level = _level_to_send(hours, step.escalation_count or 0)
     if level is None:
         logger.debug(
             "Step %s (%s): %.1fh overdue, escalation_count=%s — no new level to send",
-            step.id, step.step_code, hours, step.escalation_count,
+            step.id,
+            step.step_code,
+            hours,
+            step.escalation_count,
         )
         return False
 
@@ -254,14 +284,16 @@ def _process_step(db: Session, step: ReportStep) -> bool:
     if not recipients:
         logger.warning(
             "Step %s (%s): L%s due but NO RECIPIENTS — qm=%r pm=%r complaint=%s",
-            step.id, step.step_code, level,
+            step.id,
+            step.step_code,
+            level,
             complaint.quality_manager_email,
             complaint.plant_manager_email,
             complaint.reference_number,
         )
         return False
 
-    cc            = _build_cc(level, complaint)
+    cc = _build_cc(level, complaint)
     subject, body = _build_email(complaint, step, level, hours)
 
     # Mark overdue on first escalation only
@@ -278,7 +310,7 @@ def _process_step(db: Session, step: ReportStep) -> bool:
             },
         )
         step.is_overdue = True
-        step.status     = "overdue"
+        step.status = "overdue"
 
     # Record attempt timestamp (not success — just that we tried)
     step.escalation_sent_at = utc_now()
@@ -300,7 +332,9 @@ def _process_step(db: Session, step: ReportStep) -> bool:
     except Exception:
         logger.warning(
             "Step %s (%s): outbox entry for L%s already exists — skipping",
-            step.id, step.step_code, level,
+            step.id,
+            step.step_code,
+            level,
         )
         raise  # caller rolls back this step only
 
@@ -330,11 +364,11 @@ def _attempt_send(
             cc=entry.cc or None,
         )
 
-        entry.attempts        += 1
-        entry.status           = "sent"
-        entry.sent_at          = utc_now()
-        entry.last_error       = None
-        step.escalation_count  = level  # FIX-3: confirmed delivery only
+        entry.attempts += 1
+        entry.status = "sent"
+        entry.sent_at = utc_now()
+        entry.last_error = None
+        step.escalation_count = level  # FIX-3: confirmed delivery only
 
         _log_event(
             db,
@@ -356,13 +390,16 @@ def _attempt_send(
 
         logger.info(
             "✓ L%s sent | complaint=%s | step=%s | overdue=%s | to=%s",
-            level, complaint.reference_number, step.step_code,
-            _hours_label(hours), entry.recipients,
+            level,
+            complaint.reference_number,
+            step.step_code,
+            _hours_label(hours),
+            entry.recipients,
         )
 
     except Exception as exc:
-        entry.attempts  += 1
-        entry.status     = "failed"
+        entry.attempts += 1
+        entry.status = "failed"
         entry.last_error = str(exc)[:500]
 
         # FIX-2: backoff by attempt count, not hardcoded 0
@@ -372,7 +409,11 @@ def _attempt_send(
 
         logger.error(
             "✗ L%s FAILED (outbox_id=%s) | step=%s | error: %s — retry in %dmin",
-            level, entry.id, step.step_code, exc, delay,
+            level,
+            entry.id,
+            step.step_code,
+            exc,
+            delay,
         )
         # Do NOT raise — failed state must be committed so retry picks it up
 
@@ -393,24 +434,28 @@ def _retry_outbox_entry(db: Session, entry: EmailOutbox) -> None:
     )
 
     if step is None:
-        entry.status     = "abandoned"
+        entry.status = "abandoned"
         entry.last_error = "Step no longer exists in DB"
-        logger.warning("Outbox %s abandoned — step_id=%s deleted", entry.id, entry.step_id)
+        logger.warning(
+            "Outbox %s abandoned — step_id=%s deleted", entry.id, entry.step_id
+        )
         return
 
     if step.completed_at is not None:
-        entry.status     = "abandoned"
+        entry.status = "abandoned"
         entry.last_error = "Step completed before retry — no longer relevant"
-        logger.info("Outbox %s abandoned — step_id=%s completed", entry.id, entry.step_id)
+        logger.info(
+            "Outbox %s abandoned — step_id=%s completed", entry.id, entry.step_id
+        )
         return
 
-    complaint      = step.report.complaint
-    hours_now      = _hours_overdue(step)       # may be None if due_date was pushed out
+    complaint = step.report.complaint
+    hours_now = _hours_overdue(step)  # may be None if due_date was pushed out
     hours_for_body = hours_now if hours_now is not None else 0.0
 
     # FIX-6: rebuild body with fresh data but keep the stored subject
     _, body_html = _build_email(complaint, step, entry.escalation_level, hours_for_body)
-    subject = entry.subject or f"[Escalation L{entry.escalation_level}] Step {step.step_code}"
+    subject = f"[Escalation L{entry.escalation_level}] Step {step.step_code}"
 
     try:
         _send_email(
@@ -420,34 +465,44 @@ def _retry_outbox_entry(db: Session, entry: EmailOutbox) -> None:
             cc=entry.cc or None,
         )
 
-        entry.attempts        += 1
-        entry.status           = "sent"
-        entry.sent_at          = utc_now()
-        entry.last_error       = None
-        step.escalation_count  = entry.escalation_level  # FIX-4
+        entry.attempts += 1
+        entry.status = "sent"
+        entry.sent_at = utc_now()
+        entry.last_error = None
+        step.escalation_count = entry.escalation_level  # FIX-4
 
         ctx = _hours_label(hours_now) if hours_now is not None else "no longer overdue"
         logger.info(
             "✓ Retry OK (attempt %d) — outbox_id=%s step=%s | %s | escalation_count → %d",
-            entry.attempts, entry.id, step.step_code, ctx, entry.escalation_level,
+            entry.attempts,
+            entry.id,
+            step.step_code,
+            ctx,
+            entry.escalation_level,
         )
 
     except Exception as exc:
-        entry.attempts  += 1
+        entry.attempts += 1
         entry.last_error = str(exc)[:500]
 
         if entry.attempts >= entry.max_attempts:
             entry.status = "abandoned"
             logger.error(
                 "✗ ABANDONED after %d attempts — outbox_id=%s | error: %s",
-                entry.attempts, entry.id, exc,
+                entry.attempts,
+                entry.id,
+                exc,
             )
         else:
             delay_idx = min(entry.attempts - 1, len(_RETRY_BACKOFF_MINUTES) - 1)
             delay = _RETRY_BACKOFF_MINUTES[delay_idx]
-            entry.status        = "failed"
+            entry.status = "failed"
             entry.next_retry_at = utc_now() + timedelta(minutes=delay)
             logger.warning(
                 "✗ Retry %d/%d failed — outbox_id=%s | next in %dmin | error: %s",
-                entry.attempts, entry.max_attempts, entry.id, delay, exc,
+                entry.attempts,
+                entry.max_attempts,
+                entry.id,
+                delay,
+                exc,
             )

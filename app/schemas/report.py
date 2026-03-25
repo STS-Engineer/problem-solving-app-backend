@@ -3,17 +3,22 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+
 class ReportCreate(BaseModel):
     title: str
     plant: str
     summary: Optional[str] = None
 
+
 class StepDataUpdate(BaseModel):
     data: Dict[Any, Any]
 
+
 class StepSubmit(BaseModel):
     """Marquer l'étape comme complète"""
+
     pass
+
 
 class StepValidationCreate(BaseModel):
     decision: str  # pass | fail
@@ -21,6 +26,7 @@ class StepValidationCreate(BaseModel):
     issues: Optional[List[str]] = None
     suggestions: Optional[List[str]] = None
     notes: Optional[str] = None
+
 
 class StepResponse(BaseModel):
     id: int
@@ -31,9 +37,10 @@ class StepResponse(BaseModel):
     completed_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
-    
+
     class Config:
         from_attributes = True
+
 
 class ReportProgressResponse(BaseModel):
     total_steps: int

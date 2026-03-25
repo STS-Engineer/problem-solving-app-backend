@@ -12,21 +12,44 @@ Usage:
 
 from datetime import datetime, timezone
 
-
 # ── Brand palette (matches the AVOCarbon UI) ─────────────────────────────────
-_NAVY   = "#1C2B3A"
+_NAVY = "#1C2B3A"
 _ORANGE = "#E8650A"
-_BLUE   = "#1A5F9E"
-_GREEN  = "#0E6E42"
-_RED    = "#B83228"
+_BLUE = "#1A5F9E"
+_GREEN = "#0E6E42"
+_RED = "#B83228"
 _PURPLE = "#5B21B6"
-_AMBER  = "#9E5E00"
+_AMBER = "#9E5E00"
 
 _LEVEL_CFG = {
-    1: {"color": _AMBER,  "bg": "#FEF3E2", "label": "LEVEL 1 — ATTENTION REQUIRED",  "badge": "#F59E0B", "icon": "⚠️"},
-    2: {"color": _ORANGE, "bg": "#FEF0E6", "label": "LEVEL 2 — ACTION OVERDUE",       "badge": _ORANGE,  "icon": "🔔"},
-    3: {"color": _RED,    "bg": "#FDECEB", "label": "LEVEL 3 — URGENT ESCALATION",    "badge": _RED,     "icon": "🚨"},
-    4: {"color": _RED,    "bg": "#FDECEB", "label": "LEVEL 4 — CRITICAL — FINAL NOTICE", "badge": _RED,  "icon": "🆘"},
+    1: {
+        "color": _AMBER,
+        "bg": "#FEF3E2",
+        "label": "LEVEL 1 — ATTENTION REQUIRED",
+        "badge": "#F59E0B",
+        "icon": "⚠️",
+    },
+    2: {
+        "color": _ORANGE,
+        "bg": "#FEF0E6",
+        "label": "LEVEL 2 — ACTION OVERDUE",
+        "badge": _ORANGE,
+        "icon": "🔔",
+    },
+    3: {
+        "color": _RED,
+        "bg": "#FDECEB",
+        "label": "LEVEL 3 — URGENT ESCALATION",
+        "badge": _RED,
+        "icon": "🚨",
+    },
+    4: {
+        "color": _RED,
+        "bg": "#FDECEB",
+        "label": "LEVEL 4 — CRITICAL — FINAL NOTICE",
+        "badge": _RED,
+        "icon": "🆘",
+    },
 }
 
 _STEP_LABELS = {
@@ -63,7 +86,7 @@ def _fmt_hours(h: float) -> str:
     if h < 24:
         return f"{int(h)} hour{'s' if int(h) != 1 else ''}"
     days = int(h // 24)
-    hrs  = int(h % 24)
+    hrs = int(h % 24)
     parts = [f"{days} day{'s' if days != 1 else ''}"]
     if hrs:
         parts.append(f"{hrs} hour{'s' if hrs != 1 else ''}")
@@ -72,7 +95,7 @@ def _fmt_hours(h: float) -> str:
 
 def _progress_bar(step_code: str) -> str:
     """Render a compact 8-step progress indicator as inline HTML."""
-    steps = ["D1","D2","D3","D4","D5","D6","D7","D8"]
+    steps = ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
     cells = ""
     for s in steps:
         active = s == step_code
@@ -81,14 +104,14 @@ def _progress_bar(step_code: str) -> str:
             f'  <div style="width:28px;height:28px;border-radius:6px;'
             f'    background:{"#1C2B3A" if active else "#E0E4E9"};'
             f'    color:{"white" if active else "#7A8FA0"};'
-            f'    font-family:monospace;font-size:10px;font-weight:700;'
+            f"    font-family:monospace;font-size:10px;font-weight:700;"
             f'    line-height:28px;text-align:center;">{s}</div>'
-            f'</td>'
+            f"</td>"
         )
     return (
         '<table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto">'
-        f'<tr>{cells}</tr>'
-        '</table>'
+        f"<tr>{cells}</tr>"
+        "</table>"
     )
 
 
@@ -101,7 +124,7 @@ def build_escalation_email(
     step_code: str,
     step_name: str | None = None,
     hours_overdue: float,
-    due_date: str,          # ISO string
+    due_date: str,  # ISO string
     cqt_email: str | None,
     quality_manager_email: str | None,
     plant_manager_email: str | None,
@@ -113,10 +136,10 @@ def build_escalation_email(
     Returns:
         (subject: str, body_html: str)
     """
-    cfg      = _LEVEL_CFG.get(level, _LEVEL_CFG[1])
-    s_label  = step_name or _STEP_LABELS.get(step_code, step_code)
-    msg      = _LEVEL_MESSAGES.get(level, _LEVEL_MESSAGES[1])
-    overdue  = _fmt_hours(hours_overdue)
+    cfg = _LEVEL_CFG.get(level, _LEVEL_CFG[1])
+    s_label = step_name or _STEP_LABELS.get(step_code, step_code)
+    msg = _LEVEL_MESSAGES.get(level, _LEVEL_MESSAGES[1])
+    overdue = _fmt_hours(hours_overdue)
 
     # Parse due_date for display
     try:
@@ -141,10 +164,10 @@ def build_escalation_email(
     for role, email in role_map:
         if email:
             contacts_rows += (
-                f'<tr>'
+                f"<tr>"
                 f'  <td style="padding:4px 0;font-size:12px;color:#7A8FA0;white-space:nowrap">{role}</td>'
                 f'  <td style="padding:4px 0 4px 16px;font-size:12px;color:{_NAVY};font-weight:600">{email}</td>'
-                f'</tr>'
+                f"</tr>"
             )
 
     # Progress bar

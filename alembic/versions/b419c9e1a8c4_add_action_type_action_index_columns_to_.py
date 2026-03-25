@@ -13,48 +13,48 @@ ActionCards can be scoped to a specific corrective action:
 Files without these set (NULL) are "step-level" files — existing behaviour
 is fully preserved. No existing rows are affected.
 """
+
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
 
-
 # revision identifiers, used by Alembic.
-revision: str = 'b419c9e1a8c4'
-down_revision: Union[str, Sequence[str], None] = '3a37c9264c56'
+revision: str = "b419c9e1a8c4"
+down_revision: Union[str, Sequence[str], None] = "3a37c9264c56"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
     op.add_column(
-        'step_files',
+        "step_files",
         sa.Column(
-            'action_type',
+            "action_type",
             sa.String(20),
             nullable=True,
             comment="'occurrence' | 'detection' | NULL for step-level files",
         ),
     )
     op.add_column(
-        'step_files',
+        "step_files",
         sa.Column(
-            'action_index',
+            "action_index",
             sa.Integer(),
             nullable=True,
-            comment='0-based index into the corrective action array | NULL for step-level files',
+            comment="0-based index into the corrective action array | NULL for step-level files",
         ),
     )
     # Optional: index for fast per-action queries
     op.create_index(
-        'idx_step_files_action',
-        'step_files',
-        ['report_step_id', 'action_type', 'action_index'],
-        postgresql_where=sa.text('action_type IS NOT NULL'),
+        "idx_step_files_action",
+        "step_files",
+        ["report_step_id", "action_type", "action_index"],
+        postgresql_where=sa.text("action_type IS NOT NULL"),
     )
 
 
 def downgrade() -> None:
-    op.drop_index('idx_step_files_action', table_name='step_files')
-    op.drop_column('step_files', 'action_index')
-    op.drop_column('step_files', 'action_type')
+    op.drop_index("idx_step_files_action", table_name="step_files")
+    op.drop_column("step_files", "action_index")
+    op.drop_column("step_files", "action_type")

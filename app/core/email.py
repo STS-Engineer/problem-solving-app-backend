@@ -39,7 +39,10 @@ def _send_sync(
 
     logger.debug(
         "SMTP send: host=%s port=%s user=%r to=%s",
-        SMTP_HOST, SMTP_PORT, SMTP_USER, all_recipients,
+        SMTP_HOST,
+        SMTP_PORT,
+        SMTP_USER,
+        all_recipients,
     )
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:

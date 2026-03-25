@@ -17,3 +17,9 @@ Pillow
 openpyxl
 apscheduler
 asyncpg
+matplotlib
+reportlab
+numpy
+
+black
+flake8

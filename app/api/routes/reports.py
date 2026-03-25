@@ -13,27 +13,27 @@ from app.schemas.report import *
 
 router = APIRouter()
 
+
 @router.get("/complaint/{reference_number}/export")
 async def export_by_complaint(
-    reference_number: str,         
+    reference_number: str,
     db: Session = Depends(get_db),
 ):
     _, report = _get_report_by_ref(reference_number, db)
 
     if not report:
         raise HTTPException(
-            status_code=404,
-            detail="No 8D report found for this complaint"
+            status_code=404, detail="No 8D report found for this complaint"
         )
 
     if not ReportExportService.is_report_ready(report):
         raise HTTPException(
-            status_code=409,
-            detail="8D report is not ready for export yet."
+            status_code=409, detail="8D report is not ready for export yet."
         )
 
     if report.report_url:
         from fastapi.responses import RedirectResponse
+
         return RedirectResponse(url=report.report_url)
 
     try:
@@ -41,11 +41,14 @@ async def export_by_complaint(
         report.report_url = url
         db.commit()
         from fastapi.responses import RedirectResponse
+
         return RedirectResponse(url=url)
     except Exception:
         return _stream_excel(db, report.id)
 
+
 # ── 3. Export by report_id  (direct / admin use) ──────────────────────────────
+
 
 @router.get("/{report_id}/export")
 def export_by_report_id(
@@ -65,7 +68,10 @@ def export_by_report_id(
         )
 
     return _stream_excel(db, report.id)
+
+
 # ── shared helper ─────────────────────────────────────────────────────────────
+
 
 @router.get("/complaint/{reference_number}/preview")
 def preview_by_complaint(
@@ -86,23 +92,29 @@ def preview_by_complaint(
     for step in report.steps:
         files_by_scope: dict = {}
         for sf in step.step_files:
-            key = f"{sf.action_type}:{sf.action_index}" if sf.action_type and sf.action_index is not None else "global"
-            files_by_scope.setdefault(key, []).append({
-                "id": sf.id,                           
-                "file_id": sf.file_id,
-                "filename": sf.file.original_name,     
-                "mime_type": sf.file.mime_type,
-                "size_bytes": sf.file.size_bytes,
-                "action_type": sf.action_type,
-                "action_index": sf.action_index,
-                "uploaded_at": sf.created_at.isoformat() if sf.created_at else None,
-            })
+            key = (
+                f"{sf.action_type}:{sf.action_index}"
+                if sf.action_type and sf.action_index is not None
+                else "global"
+            )
+            files_by_scope.setdefault(key, []).append(
+                {
+                    "id": sf.id,
+                    "file_id": sf.file_id,
+                    "filename": sf.file.original_name,
+                    "mime_type": sf.file.mime_type,
+                    "size_bytes": sf.file.size_bytes,
+                    "action_type": sf.action_type,
+                    "action_index": sf.action_index,
+                    "uploaded_at": sf.created_at.isoformat() if sf.created_at else None,
+                }
+            )
 
         steps_data[step.step_code] = {
             "status": step.status,
             "data": step.data or {},
             "files": files_by_scope,
-            "step_db_id": step.id,                   
+            "step_db_id": step.id,
         }
 
     return {
@@ -111,6 +123,7 @@ def preview_by_complaint(
         "complaint_status": complaint.status,
         "steps": steps_data,
     }
+
 
 def _stream_excel(db: Session, report_id: int) -> StreamingResponse:
     from app.models.report import Report
@@ -128,7 +141,7 @@ def _stream_excel(db: Session, report_id: int) -> StreamingResponse:
 
     try:
         file_bytes = ReportExportService.generate_excel(db, report_id)
-        filename   = ReportExportService.get_filename(db, report_id)
+        filename = ReportExportService.get_filename(db, report_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
@@ -139,7 +152,6 @@ def _stream_excel(db: Session, report_id: int) -> StreamingResponse:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-
 
 
 def _get_report_by_ref(reference_number: str, db: Session):

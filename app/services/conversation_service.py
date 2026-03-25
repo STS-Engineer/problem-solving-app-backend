@@ -28,6 +28,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.report_step import ReportStep
 from app.models.step_conversation import StepConversation
 from app.models.step_file import StepFile
 from app.models.file import File as FileModel
@@ -39,6 +40,7 @@ from app.services.prompts import (
     build_already_known_block,
 )
 from app.services.step_service import StepService
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,33 +49,50 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 _FIELD_ALIASES: Dict[str, str] = {
-    "role":            "function",
-    "job_title":       "function",
-    "position":        "function",
-    "title":           "function",
-    "dept":            "department",
+    "role": "function",
+    "job_title": "function",
+    "position": "function",
+    "title": "function",
+    "dept": "department",
     "department_name": "department",
 }
 
 _DEPARTMENT_MAP: Dict[str, str] = {
-    "production": "production", "manufacturing": "production", "fabrication": "production",
+    "production": "production",
+    "manufacturing": "production",
+    "fabrication": "production",
     "maintenance": "maintenance",
-    "engineering": "engineering", "r&d": "engineering",
-    "quality": "quality", "qa": "quality", "qc": "quality",
-    "quality control": "quality", "quality assurance": "quality",
-    "logistics": "logistics", "supply chain": "logistics", "warehouse": "logistics",
-    "supplier quality": "supplier_quality", "supplier_quality": "supplier_quality", "sqe": "supplier_quality",
+    "engineering": "engineering",
+    "r&d": "engineering",
+    "quality": "quality",
+    "qa": "quality",
+    "qc": "quality",
+    "quality control": "quality",
+    "quality assurance": "quality",
+    "logistics": "logistics",
+    "supply chain": "logistics",
+    "warehouse": "logistics",
+    "supplier quality": "supplier_quality",
+    "supplier_quality": "supplier_quality",
+    "sqe": "supplier_quality",
 }
 
 _FUNCTION_MAP: Dict[str, str] = {
     "operator": "operator",
-    "line_leader": "line_leader", "line leader": "line_leader",
-    "team leader": "team_leader", "team_leader": "team_leader", "teamleader": "team_leader", "leader": "team_leader",
+    "line_leader": "line_leader",
+    "line leader": "line_leader",
+    "team leader": "team_leader",
+    "team_leader": "team_leader",
+    "teamleader": "team_leader",
+    "leader": "team_leader",
     "supervisor": "supervisor",
-    "engineer": "engineer", "engineering": "engineer", "technician": "engineer",
-    "project manager": "project_manager", "project_manager": "project_manager", "manager": "project_manager",
+    "engineer": "engineer",
+    "engineering": "engineer",
+    "technician": "engineer",
+    "project manager": "project_manager",
+    "project_manager": "project_manager",
+    "manager": "project_manager",
 }
-
 
 
 # REPLACE _normalise_member with:
@@ -91,9 +110,9 @@ def _normalise_member(raw: Dict) -> Dict:
     member["function"] = _FUNCTION_MAP.get(func_raw, func_raw or "unknown")
 
     return {
-        "name":       member.get("name", ""),
+        "name": member.get("name", ""),
         "department": member.get("department", "unknown"),
-        "function":   member.get("function", "unknown"),
+        "function": member.get("function", "unknown"),
     }
 
 
@@ -101,7 +120,9 @@ def _merge_extracted(current: Dict, extracted: Dict) -> Dict:
     merged = {**current}
     for key, value in extracted.items():
         if key == "team_members" and isinstance(value, list):
-            merged["team_members"] = [_normalise_member(m) for m in value if isinstance(m, dict)]
+            merged["team_members"] = [
+                _normalise_member(m) for m in value if isinstance(m, dict)
+            ]
         elif key == "is_is_not_factors" and isinstance(value, list):
             existing = {f["factor"]: f for f in (merged.get("is_is_not_factors") or [])}
             for patch in value:
@@ -112,23 +133,35 @@ def _merge_extracted(current: Dict, extracted: Dict) -> Dict:
         elif key == "five_w_2h" and isinstance(value, dict):
             merged["five_w_2h"] = {**(merged.get("five_w_2h") or {}), **value}
         elif key == "suspected_parts_status" and isinstance(value, list):
-            existing = {r["location"]: r for r in (merged.get("suspected_parts_status") or [])}
+            existing = {
+                r["location"]: r for r in (merged.get("suspected_parts_status") or [])
+            }
             for row in value:
                 loc = row.get("location")
                 if loc:
                     existing[loc] = {**(existing.get(loc) or {"location": loc}), **row}
             merged["suspected_parts_status"] = list(existing.values())
-        elif key in ("four_m_occurrence", "four_m_non_detection") and isinstance(value, dict):
+        elif key in ("four_m_occurrence", "four_m_non_detection") and isinstance(
+            value, dict
+        ):
             merged[key] = {**(merged.get(key) or {}), **value}
-        elif key in ("five_whys_occurrence", "five_whys_non_detection") and isinstance(value, dict):
+        elif key in ("five_whys_occurrence", "five_whys_non_detection") and isinstance(
+            value, dict
+        ):
             merged[key] = {**(merged.get(key) or {}), **value}
-        elif key in ("corrective_actions_occurrence", "corrective_actions_detection") and isinstance(value, list):
+        elif key in (
+            "corrective_actions_occurrence",
+            "corrective_actions_detection",
+        ) and isinstance(value, list):
             merged[key] = value
         elif key == "monitoring" and isinstance(value, dict):
             merged["monitoring"] = {**(merged.get("monitoring") or {}), **value}
         elif key in (
-            "recurrence_risks", "replication_validations", "knowledge_base_updates",
-            "long_term_monitoring", "lesson_disseminations",
+            "recurrence_risks",
+            "replication_validations",
+            "knowledge_base_updates",
+            "long_term_monitoring",
+            "lesson_disseminations",
         ) and isinstance(value, list):
             merged[key] = value
         else:
@@ -139,6 +172,7 @@ def _merge_extracted(current: Dict, extracted: Dict) -> Dict:
 # =============================================================================
 # SECTION COMPLETENESS
 # =============================================================================
+
 
 def _section_is_complete(section_key: str, extracted: Dict) -> bool:
     if section_key == "team_members":
@@ -161,17 +195,23 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
         factors = extracted.get("is_is_not_factors", [])
         if not isinstance(factors, list):
             return False
-        return sum(
-            1 for f in factors
-            if isinstance(f, dict)
-            and str(f.get("is_problem", "")).strip()
-            and str(f.get("is_not_problem", "")).strip()
-        ) >= 2
+        return (
+            sum(
+                1
+                for f in factors
+                if isinstance(f, dict)
+                and str(f.get("is_problem", "")).strip()
+                and str(f.get("is_not_problem", "")).strip()
+            )
+            >= 2
+        )
 
     if section_key == "containment":
         dps = extracted.get("defected_part_status", {})
         has_defected = isinstance(dps, dict) and any(
-            bool(v) for k, v in dps.items() if k in ("returned", "isolated", "identified")
+            bool(v)
+            for k, v in dps.items()
+            if k in ("returned", "isolated", "identified")
         )
         suspected = extracted.get("suspected_parts_status", [])
         has_suspected = isinstance(suspected, list) and any(
@@ -179,9 +219,8 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
         )
         alert_to = extracted.get("alert_communicated_to", {})
         has_alert = (
-            (isinstance(alert_to, dict) and any(bool(v) for v in alert_to.values()))
-            or str(extracted.get("alert_number", "")).strip()
-        )
+            isinstance(alert_to, dict) and any(bool(v) for v in alert_to.values())
+        ) or str(extracted.get("alert_number", "")).strip()
         return (has_defected or has_suspected) and bool(has_alert)
 
     if section_key == "restart":
@@ -194,19 +233,38 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
         )
 
     if section_key in ("four_m_occurrence", "four_m_non_detection"):
-        fm_key  = "four_m_occurrence"     if section_key == "four_m_occurrence" else "four_m_non_detection"
-        rc_key  = "root_cause_occurrence" if section_key == "four_m_occurrence" else "root_cause_non_detection"
-        why_key = "five_whys_occurrence"  if section_key == "four_m_occurrence" else "five_whys_non_detection"
-        fm   = extracted.get(fm_key, {})
-        rc   = extracted.get(rc_key, {})
+        fm_key = (
+            "four_m_occurrence"
+            if section_key == "four_m_occurrence"
+            else "four_m_non_detection"
+        )
+        rc_key = (
+            "root_cause_occurrence"
+            if section_key == "four_m_occurrence"
+            else "root_cause_non_detection"
+        )
+        why_key = (
+            "five_whys_occurrence"
+            if section_key == "four_m_occurrence"
+            else "five_whys_non_detection"
+        )
+        fm = extracted.get(fm_key, {})
+        rc = extracted.get(rc_key, {})
         whys = extracted.get(why_key, {})
         whys_filled = (
-            sum(1 for w in whys.values() if isinstance(w, dict) and str(w.get("answer", "")).strip())
-            if isinstance(whys, dict) else 0
+            sum(
+                1
+                for w in whys.values()
+                if isinstance(w, dict) and str(w.get("answer", "")).strip()
+            )
+            if isinstance(whys, dict)
+            else 0
         )
         return (
-            isinstance(fm, dict) and str(fm.get("selected_problem", "")).strip()
-            and isinstance(rc, dict) and str(rc.get("root_cause", "")).strip()
+            isinstance(fm, dict)
+            and str(fm.get("selected_problem", "")).strip()
+            and isinstance(rc, dict)
+            and str(rc.get("root_cause", "")).strip()
             and str(rc.get("validation_method", "")).strip()
             and whys_filled >= 3
         )
@@ -217,7 +275,8 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
             str(a.get("action", "")).strip()
             and str(a.get("responsible", "")).strip()
             and str(a.get("due_date", "")).strip()
-            for a in actions if isinstance(a, dict)
+            for a in actions
+            if isinstance(a, dict)
         )
 
     if section_key == "corrective_detection":
@@ -226,61 +285,88 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
             str(a.get("action", "")).strip()
             and str(a.get("responsible", "")).strip()
             and str(a.get("due_date", "")).strip()
-            for a in actions if isinstance(a, dict)
+            for a in actions
+            if isinstance(a, dict)
         )
 
     if section_key == "implementation":
         occ = extracted.get("corrective_actions_occurrence", [])
         det = extracted.get("corrective_actions_detection", [])
         return (
-            isinstance(occ, list) and any(str(a.get("imp_date", "")).strip() for a in occ if isinstance(a, dict))
+            isinstance(occ, list)
+            and any(
+                str(a.get("imp_date", "")).strip() for a in occ if isinstance(a, dict)
+            )
         ) or (
-            isinstance(det, list) and any(str(a.get("imp_date", "")).strip() for a in det if isinstance(a, dict))
+            isinstance(det, list)
+            and any(
+                str(a.get("imp_date", "")).strip() for a in det if isinstance(a, dict)
+            )
         )
 
     if section_key == "monitoring_checklist":
         mon = extracted.get("monitoring", {})
         checklist = extracted.get("checklist", [])
-        
+
         # Base fields
-        if not (isinstance(mon, dict) and str(mon.get("monitoring_interval", "")).strip()
-                and str(extracted.get("audited_by", "")).strip()):
+        if not (
+            isinstance(mon, dict)
+            and str(mon.get("monitoring_interval", "")).strip()
+            and str(extracted.get("audited_by", "")).strip()
+        ):
             return False
-        
+
         # Checklist: at least 50% verified across any shift
         if checklist:
             num_shifts = extracted.get("num_shifts", 3)
             shift_keys = ["shift_1", "shift_2", "shift_3"][:num_shifts]
             verified = sum(
-                1 for item in checklist
+                1
+                for item in checklist
                 if isinstance(item, dict) and any(item.get(k) for k in shift_keys)
             )
             if verified < math.ceil(len(checklist) * 0.5):
                 return False
-        
+
         return True
 
     if section_key == "prevention":
         risks = extracted.get("recurrence_risks", [])
         return isinstance(risks, list) and any(
-            str(r.get("area_line_product", "")).strip() and str(r.get("action_taken", "")).strip()
-            for r in risks if isinstance(r, dict)
+            str(r.get("area_line_product", "")).strip()
+            and str(r.get("action_taken", "")).strip()
+            for r in risks
+            if isinstance(r, dict)
         )
 
     if section_key == "knowledge":
-        kb  = extracted.get("knowledge_base_updates", [])
+        kb = extracted.get("knowledge_base_updates", [])
         ltm = extracted.get("long_term_monitoring", [])
         return (
-            isinstance(kb, list) and any(str(u.get("document_type", "")).strip() for u in kb if isinstance(u, dict))
+            isinstance(kb, list)
+            and any(
+                str(u.get("document_type", "")).strip()
+                for u in kb
+                if isinstance(u, dict)
+            )
         ) or (
-            isinstance(ltm, list) and any(str(m.get("checkpoint_type", "")).strip() for m in ltm if isinstance(m, dict))
+            isinstance(ltm, list)
+            and any(
+                str(m.get("checkpoint_type", "")).strip()
+                for m in ltm
+                if isinstance(m, dict)
+            )
         )
 
     if section_key == "lessons_learned":
         disem = extracted.get("lesson_disseminations", [])
         return bool(
             isinstance(disem, list)
-            and any(str(d.get("audience_team", "")).strip() for d in disem if isinstance(d, dict))
+            and any(
+                str(d.get("audience_team", "")).strip()
+                for d in disem
+                if isinstance(d, dict)
+            )
             and str(extracted.get("ll_conclusion", "")).strip()
         )
 
@@ -300,6 +386,7 @@ def _section_is_complete(section_key: str, extracted: Dict) -> bool:
 # =============================================================================
 # PRIOR STEP DATA COLLECTOR
 # =============================================================================
+
 
 def _collect_all_step_data(db: Session, step_id: int) -> Dict[str, Any]:
     """Merge step.data from ALL steps of the same report into one flat dict."""
@@ -327,6 +414,7 @@ def _collect_all_step_data(db: Session, step_id: int) -> Dict[str, Any]:
 # =============================================================================
 # SMART OPENING SEED BUILDER
 # =============================================================================
+
 
 def _build_smart_opening(
     section_key: str,
@@ -415,14 +503,15 @@ def _build_smart_opening(
 # SERVICE
 # =============================================================================
 
+
 class ConversationService:
     def __init__(self, db: Session):
         self.db = db
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
-
     def get_current_step_data(self, step_id: int) -> Dict[str, Any]:
         from app.models.report_step import ReportStep
+
         step = self.db.get(ReportStep, step_id)
         return (step.data or {}) if step else {}
 
@@ -451,14 +540,16 @@ class ConversationService:
                 kb_coaching=kb_coaching,
                 twenty_rules=twenty_rules,
             )
-            self._persist_message(step_id, section_key, "assistant", opening, 0, commit=True)
+            self._persist_message(
+                step_id, section_key, "assistant", opening, 0, commit=True
+            )
             messages = [self._msg_dict("assistant", opening, 0)]
 
         return {
-            "step_id":     step_id,
+            "step_id": step_id,
             "section_key": section_key,
-            "messages":    messages,
-            "state":       self._infer_state(section_key, messages),
+            "messages": messages,
+            "state": self._infer_state(section_key, messages),
         }
 
     def send_message(
@@ -477,7 +568,8 @@ class ConversationService:
         if uploaded_file_names:
             file_list = ", ".join(uploaded_file_names)
             effective_message = (
-                f"{user_message}\n\n📎 Uploaded: {file_list}" if user_message.strip()
+                f"{user_message}\n\n📎 Uploaded: {file_list}"
+                if user_message.strip()
                 else f"📎 Uploaded: {file_list}"
             )
         if action_type is not None and action_index is not None and uploaded_file_names:
@@ -490,12 +582,14 @@ class ConversationService:
         history = self._load_messages(step_id, section_key)
         next_idx = len(history)
 
-        self._persist_message(step_id, section_key, "user", effective_message, next_idx, commit=False)
+        self._persist_message(
+            step_id, section_key, "user", effective_message, next_idx, commit=False
+        )
         history.append(self._msg_dict("user", effective_message, next_idx))
         next_idx += 1
 
         existing_files = self._get_step_file_names(step_id)
-        all_step_data  = _collect_all_step_data(self.db, step_id)
+        all_step_data = _collect_all_step_data(self.db, step_id)
         bot_reply = self._call_ai(
             section_key=section_key,
             history=history,
@@ -509,7 +603,15 @@ class ConversationService:
         extracted = self._parse_extracted_fields(bot_reply)
         meta = {"extracted_fields": extracted} if extracted else None
 
-        self._persist_message(step_id, section_key, "assistant", bot_reply, next_idx, meta=meta, commit=False)
+        self._persist_message(
+            step_id,
+            section_key,
+            "assistant",
+            bot_reply,
+            next_idx,
+            meta=meta,
+            commit=False,
+        )
         history.append(self._msg_dict("assistant", bot_reply, next_idx, meta))
 
         if extracted:
@@ -521,13 +623,19 @@ class ConversationService:
                     if name and name not in all_names:
                         all_names.append(name)
                 extracted["evidence_documents"] = ", ".join(all_names)
-            self._update_step_data(step_id, extracted, commit=False)
 
-        section_complete = bool(extracted and _section_is_complete(section_key, extracted))
+            self._update_step_data(step_id, extracted, commit=False)
+            self._persist_step_cost(step_id, extracted)  # ← NEW: one line
+
+        section_complete = bool(
+            extracted and _section_is_complete(section_key, extracted)
+        )
 
         if section_complete:
             state = "fulfilled"
-            self._maybe_mark_step_fulfilled(step_id, just_completed_section=section_key, commit=False)
+            self._maybe_mark_step_fulfilled(
+                step_id, just_completed_section=section_key, commit=False
+            )
         elif len(history) > 1:
             state = "collecting"
         else:
@@ -536,18 +644,42 @@ class ConversationService:
         self.db.flush()
 
         return {
-            "step_id":          step_id,
-            "section_key":      section_key,
-            "bot_reply":        bot_reply,
+            "step_id": step_id,
+            "section_key": section_key,
+            "bot_reply": bot_reply,
             "extracted_fields": extracted,
-            "state":            state,
-            "messages":         history,
+            "state": state,
+            "messages": history,
         }
+
+    # ── cost persistence ───────────────────────────────────────────────────────
+
+    def _persist_step_cost(self, step_id: int, extracted: dict) -> None:
+        """
+        Write cost from extracted_fields into report_steps.cost .
+
+        Sentinel values:
+          NULL              → cost not yet declared (do not overwrite)
+          0 + no_cost=True  → user explicitly said no cost
+          N > 0             → actual cost in cents (amount × 100)
+        """
+        cost = extracted.get("cost")
+        if not cost or not isinstance(cost, dict):
+            return  # AI didn't mention cost this turn — leave existing value
+
+        step = self.db.query(ReportStep).filter(ReportStep.id == step_id).first()
+        if not step:
+            return
+
+        if cost.get("no_cost"):
+            step.cost = 0
+        elif cost.get("amount") is not None:
+            step.cost = float(cost["amount"])
 
     def reset_conversation(self, step_id: int, section_key: str) -> Dict[str, Any]:
         self.db.query(StepConversation).filter(
             StepConversation.report_step_id == step_id,
-            StepConversation.section_key    == section_key,
+            StepConversation.section_key == section_key,
         ).delete()
         self.db.commit()
         return self.get_or_start_conversation(step_id, section_key)
@@ -562,7 +694,9 @@ class ConversationService:
         result: Dict[str, List[Dict]] = {}
         for row in rows:
             result.setdefault(row.section_key, []).append(
-                self._msg_dict(row.role, row.content, row.message_index, row.meta, row.created_at)
+                self._msg_dict(
+                    row.role, row.content, row.message_index, row.meta, row.created_at
+                )
             )
         return result
 
@@ -622,7 +756,7 @@ class ConversationService:
         """
         from app.services.member_tool import MEMBER_LOOKUP_TOOL, execute_member_lookup
 
-        schema         = EXTRACTION_SCHEMA.get(section_key, "")
+        schema = EXTRACTION_SCHEMA.get(section_key, "")
         coaching_rules = SECTION_COACHING_RULES.get(section_key, "")
 
         already_known = build_already_known_block(
@@ -718,7 +852,7 @@ class ConversationService:
                     timeout=30,
                 )
 
-                choice  = response.choices[0]
+                choice = response.choices[0]
                 message = choice.message
 
                 # Plain text reply — done
@@ -731,24 +865,28 @@ class ConversationService:
                 for tool_call in message.tool_calls:
                     if tool_call.function.name == "lookup_member":
                         try:
-                            args  = json.loads(tool_call.function.arguments)
+                            args = json.loads(tool_call.function.arguments)
                             query = args.get("query", "")
                         except (json.JSONDecodeError, AttributeError):
                             query = ""
 
                         tool_result = execute_member_lookup(query, self.db)
 
-                        openai_messages.append({
-                            "role":         "tool",
-                            "tool_call_id": tool_call.id,
-                            "content":      tool_result,
-                        })
+                        openai_messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": tool_result,
+                            }
+                        )
 
             # Fallback: exceeded tool rounds
-            openai_messages.append({
-                "role":    "user",
-                "content": "[system: please provide your final answer now]",
-            })
+            openai_messages.append(
+                {
+                    "role": "user",
+                    "content": "[system: please provide your final answer now]",
+                }
+            )
             final = self.client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=openai_messages,
@@ -769,7 +907,7 @@ class ConversationService:
             self.db.query(StepConversation)
             .filter(
                 StepConversation.report_step_id == step_id,
-                StepConversation.section_key    == section_key,
+                StepConversation.section_key == section_key,
             )
             .order_by(StepConversation.message_index)
             .all()
@@ -790,15 +928,17 @@ class ConversationService:
         *,
         commit: bool = False,
     ) -> None:
-        self.db.add(StepConversation(
-            report_step_id=step_id,
-            section_key=section_key,
-            role=role,
-            content=content,
-            message_index=message_index,
-            meta=meta,
-            created_at=datetime.now(timezone.utc),
-        ))
+        self.db.add(
+            StepConversation(
+                report_step_id=step_id,
+                section_key=section_key,
+                role=role,
+                content=content,
+                message_index=message_index,
+                meta=meta,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
         if commit:
             self.db.commit()
         else:
@@ -813,16 +953,18 @@ class ConversationService:
         created_at: Optional[datetime] = None,
     ) -> Dict:
         return {
-            "role":          role,
-            "content":       content,
+            "role": role,
+            "content": content,
             "message_index": message_index,
-            "meta":          meta,
-            "created_at":    created_at.isoformat() if created_at else None,
+            "meta": meta,
+            "created_at": created_at.isoformat() if created_at else None,
         }
 
     @staticmethod
     def _parse_extracted_fields(text: str) -> Optional[Dict]:
-        match = re.search(r"<extracted_fields>(.*?)</extracted_fields>", text, re.DOTALL)
+        match = re.search(
+            r"<extracted_fields>(.*?)</extracted_fields>", text, re.DOTALL
+        )
         if not match:
             return None
         try:
@@ -831,28 +973,36 @@ class ConversationService:
             logger.warning("Failed to parse extracted_fields JSON from AI reply")
             return None
 
-    def _update_step_data(self, step_id: int, extracted: Dict, *, commit: bool = False) -> None:
+    def _update_step_data(
+        self, step_id: int, extracted: Dict, *, commit: bool = False
+    ) -> None:
         from app.models.report_step import ReportStep
+
         step = self.db.get(ReportStep, step_id)
         if step is None:
             logger.warning("_update_step_data: step %d not found", step_id)
             return
-        step.data       = _merge_extracted(step.data or {}, extracted)
+        step.data = _merge_extracted(step.data or {}, extracted)
         step.updated_at = datetime.now(timezone.utc)
         if commit:
             self.db.commit()
         else:
             self.db.flush()
-        logger.info("Saved extracted fields to step %d (keys: %s)", step_id, list(extracted.keys()))
+        logger.info(
+            "Saved extracted fields to step %d (keys: %s)",
+            step_id,
+            list(extracted.keys()),
+        )
 
     def _maybe_mark_step_fulfilled(
-    self,
-    step_id: int,
-    just_completed_section: str,
-    *,
-    commit: bool = False,
-) -> None:
+        self,
+        step_id: int,
+        just_completed_section: str,
+        *,
+        commit: bool = False,
+    ) -> None:
         from app.models.report_step import ReportStep
+
         step = self.db.get(ReportStep, step_id)
         if step is None:
             return
@@ -865,7 +1015,9 @@ class ConversationService:
                 if section_key == just_completed_section:
                     continue
                 if not self._is_section_fulfilled(step_id, section_key):
-                    logger.debug("Step %d: section '%s' not yet fulfilled", step_id, section_key)
+                    logger.debug(
+                        "Step %d: section '%s' not yet fulfilled", step_id, section_key
+                    )
                     return
 
         now = datetime.now(timezone.utc)
@@ -889,14 +1041,14 @@ class ConversationService:
             self.db.query(StepConversation)
             .filter(
                 StepConversation.report_step_id == step_id,
-                StepConversation.section_key    == section_key,
-                StepConversation.role           == "assistant",
+                StepConversation.section_key == section_key,
+                StepConversation.role == "assistant",
             )
             .order_by(StepConversation.message_index)
             .all()
         )
         for row in rows:
-            meta      = row.meta or {}
+            meta = row.meta or {}
             extracted = meta.get("extracted_fields")
             if extracted and _section_is_complete(section_key, extracted):
                 return True
@@ -906,12 +1058,11 @@ class ConversationService:
     def _infer_state(section_key: str, messages: List[Dict]) -> str:
         for msg in reversed(messages):
             if msg["role"] == "assistant":
-                meta      = msg.get("meta") or {}
+                meta = msg.get("meta") or {}
                 extracted = meta.get("extracted_fields")
                 if extracted and _section_is_complete(section_key, extracted):
                     return "fulfilled"
         return "opening" if len(messages) <= 1 else "collecting"
-    
 
     def get_complaint_context(self, report_step_id: int) -> Dict:
         query = text("""

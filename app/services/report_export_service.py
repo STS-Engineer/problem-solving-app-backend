@@ -18,7 +18,7 @@ from app.models.report import Report
 from app.models.report_step import ReportStep
 from app.models.file import File as FileModel
 from app.models.step_file import StepFile
-from app.services.file_storage import storage   # GitHub singleton
+from app.services.file_storage import storage  # GitHub singleton
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +29,18 @@ TEMPLATE_PATH = (
 
 # ── MIME types we can embed as Excel images ───────────────────────────────────
 _IMAGE_MIMES = {
-    "image/jpeg", "image/jpg", "image/png",
-    "image/gif",  "image/bmp", "image/tiff",
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/bmp",
+    "image/tiff",
 }
 _STEP_ORDER = ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
 # =============================================================================
 # GENERIC CELL HELPERS
 # =============================================================================
+
 
 def _s(value, default: str = "") -> str:
     if value is None:
@@ -43,15 +48,21 @@ def _s(value, default: str = "") -> str:
     if isinstance(value, bool):
         return "✓" if value else ""
     return str(value).strip()
+
+
 def _step_data(steps: Dict[str, ReportStep], code: str) -> Dict[str, Any]:
     s = steps.get(code)
     return (s.data or {}) if s else {}
+
+
 def _safe_filename(name: str) -> str:
     name = name.replace("\u2013", "-").replace("\u2014", "-")
     name = name.replace("\u2018", "'").replace("\u2019", "'")
     name = name.encode("latin-1", errors="ignore").decode("latin-1")
     name = re.sub(r'[\\/*?:"<>|]', "", name)
     return name.strip()
+
+
 def _resolve_cell(ws: Worksheet, coord: str):
     """
     Return the writable top-left cell for a given coordinate.
@@ -66,28 +77,34 @@ def _resolve_cell(ws: Worksheet, coord: str):
             master = ws.cell(merge_range.min_row, merge_range.min_col)
             if not isinstance(master, MergedCell):
                 return master
-    return None   # slave with no findable master — skip
+    return None  # slave with no findable master — skip
+
+
 def _w(ws: Worksheet, coord: str, value) -> None:
     """Write a value — automatically redirects slave merged cells to their master."""
     cell = _resolve_cell(ws, coord)
     if cell is not None:
         cell.value = value
+
+
 def _wb(ws: Worksheet, coord: str, flag: bool) -> None:
     """Write a boolean — automatically redirects slave merged cells to their master."""
     cell = _resolve_cell(ws, coord)
     if cell is not None:
         cell.value = bool(flag)
+
+
 def _wrap(ws: Worksheet, coord: str) -> None:
     cell = _resolve_cell(ws, coord)
     if cell is None:
         return
     ex = cell.alignment or Alignment()
     cell.alignment = Alignment(
-        wrap_text    = True,
-        horizontal   = ex.horizontal,
-        vertical     = ex.vertical,
-        indent       = ex.indent or 0,
-        text_rotation= ex.text_rotation or 0,
+        wrap_text=True,
+        horizontal=ex.horizontal,
+        vertical=ex.vertical,
+        indent=ex.indent or 0,
+        text_rotation=ex.text_rotation or 0,
     )
 
 
@@ -104,14 +121,15 @@ def _hyperlink(ws: Worksheet, coord: str, url: str, label: str) -> None:
     cell = _resolve_cell(ws, coord)
     if cell is None:
         return
-    cell.value     = label
+    cell.value = label
     cell.hyperlink = url
-    cell.font      = Font(color="0563C1", underline="single")
+    cell.font = Font(color="0563C1", underline="single")
 
 
 # =============================================================================
 # GITHUB FILE HELPERS
 # =============================================================================
+
 
 def _fetch_bytes_sync(stored_name: str) -> Optional[bytes]:
     """Sync wrapper around the async GitHub fetch."""
@@ -156,10 +174,10 @@ def _categorise_files(
     if step is None:
         return None, []
 
-    data     = step.data or {}
+    data = step.data or {}
     evidence = data.get("evidence_documents", "") or ""
 
-    all_files    = _get_step_files(db, step, images_only=False)
+    all_files = _get_step_files(db, step, images_only=False)
     file_by_name = {f.original_name: f for f in all_files}
 
     ordered: List[FileModel] = []
@@ -188,7 +206,7 @@ def _categorise_files(
             raw = _fetch_bytes_sync(f.stored_path)
             if raw:
                 image_bytes = raw
-                continue   # embedded — skip link for this one
+                continue  # embedded — skip link for this one
 
         links.append((f.original_name, url))
 
@@ -203,8 +221,8 @@ def _insert_photo(
     height: int = 180,
 ) -> None:
     try:
-        img        = XLImage(io.BytesIO(img_bytes))
-        img.width  = width
+        img = XLImage(io.BytesIO(img_bytes))
+        img.width = width
         img.height = height
         img.anchor = anchor
         ws.add_image(img)
@@ -221,7 +239,7 @@ def _write_links(
     if not links:
         return
     col_letter = re.match(r"([A-Z]+)", start_coord).group(1)
-    start_row  = int(re.match(r"[A-Z]+(\d+)", start_coord).group(1))
+    start_row = int(re.match(r"[A-Z]+(\d+)", start_coord).group(1))
     for i, (label, url) in enumerate(links):
         _hyperlink(ws, f"{col_letter}{start_row + i}", url, f"📎 {label}")
 
@@ -230,32 +248,58 @@ def _write_links(
 # D1 — Team
 # =============================================================================
 
+
 def _member_role_bucket(member: Dict[str, Any]) -> str:
-    fn   = _s(member.get("function",   "")).lower()
+    fn = _s(member.get("function", "")).lower()
     dept = _s(member.get("department", "")).lower()
     blob = f"{fn} {dept}".strip()
 
-    def has(*kw): return any(k in blob for k in kw)
+    def has(*kw):
+        return any(k in blob for k in kw)
 
-    if has("production","operator","line leader","supervisor","line ","shopfloor","shop floor"):
+    if has(
+        "production",
+        "operator",
+        "line leader",
+        "supervisor",
+        "line ",
+        "shopfloor",
+        "shop floor",
+    ):
         return "production"
-    if has("maintenance","technician","mechanic","electrical","mechanical"):
+    if has("maintenance", "technician", "mechanic", "electrical", "mechanical"):
         return "maintenance"
-    if has("engineering","process","manufacturing","industrial","methods","method"):
+    if has(
+        "engineering", "process", "manufacturing", "industrial", "methods", "method"
+    ):
         return "engineering"
-    if has("logistics","supply","warehouse","shipping","receiving","supplier","sqa","procurement"):
+    if has(
+        "logistics",
+        "supply",
+        "warehouse",
+        "shipping",
+        "receiving",
+        "supplier",
+        "sqa",
+        "procurement",
+    ):
         return "logistics"
-    if has("team leader","leader","project","pm","manager","management"):
+    if has("team leader", "leader", "project", "pm", "manager", "management"):
         return "leader"
-    if has("quality","qc","qa","quality control","quality assurance"):
+    if has("quality", "qc", "qa", "quality control", "quality assurance"):
         return "quality"
     return "other"
 
 
 def _fill_d1(ws: Worksheet, data: Dict) -> None:
     ROLE_ROWS = {
-        "production": 6, "maintenance": 7, "engineering": 8,
-        "logistics":  9, "leader":     10, "quality":    11, "other": 12,
+        "production": 6,
+        "maintenance": 7,
+        "engineering": 8,
+        "logistics": 9,
+        "leader": 10,
+        "quality": 11,
+        "other": 12,
     }
     buckets: Dict[str, List[str]] = {k: [] for k in ROLE_ROWS}
 
@@ -270,7 +314,7 @@ def _fill_d1(ws: Worksheet, data: Dict) -> None:
 
     for role, row in ROLE_ROWS.items():
         text = "\n".join(buckets[role])
-        _w(ws,  f"B{row}", text)
+        _w(ws, f"B{row}", text)
         _wb(ws, f"J{row}", bool(buckets[role]))
         if text:
             _wrap(ws, f"B{row}")
@@ -281,6 +325,7 @@ def _fill_d1(ws: Worksheet, data: Dict) -> None:
 # D2 — Problem description + photo + Is/Is-Not
 # =============================================================================
 
+
 def _fill_d2(
     ws: Worksheet,
     data: Dict,
@@ -290,16 +335,21 @@ def _fill_d2(
     five_w: Dict = data.get("five_w_2h", {}) or {}
     lines = [_s(data.get("problem_description", ""))]
     for label, key in [
-        ("WHAT","what"),("WHERE","where"),("WHEN","when"),
-        ("WHO","who"),("WHY","why"),("HOW","how"),("HOW MANY","how_many"),
+        ("WHAT", "what"),
+        ("WHERE", "where"),
+        ("WHEN", "when"),
+        ("WHO", "who"),
+        ("WHY", "why"),
+        ("HOW", "how"),
+        ("HOW MANY", "how_many"),
     ]:
         val = _s(five_w.get(key, ""))
         if val:
             lines.append(f"{label}: {val}")
     for label, key in [
-        ("Standard","standard_applicable"),
-        ("Expected","expected_situation"),
-        ("Observed","observed_situation"),
+        ("Standard", "standard_applicable"),
+        ("Expected", "expected_situation"),
+        ("Observed", "observed_situation"),
     ]:
         val = _s(data.get(key, ""))
         if val:
@@ -319,7 +369,7 @@ def _fill_d2(
 
     # Is / Is Not
     FACTOR_ROWS = {"product": 21, "time": 22, "lot": 23, "pattern": 24}
-    for factor in (data.get("is_is_not_factors", []) or []):
+    for factor in data.get("is_is_not_factors", []) or []:
         factor_name = _s(factor.get("factor", "")).strip().lower()
         row = FACTOR_ROWS.get(factor_name)
         if not row:
@@ -344,6 +394,7 @@ def _fill_d2(
 # D3 — Containment
 # =============================================================================
 
+
 def _fill_d3(
     ws: Worksheet,
     data: Dict,
@@ -351,8 +402,8 @@ def _fill_d3(
     d3_step: Optional[ReportStep],
 ) -> None:
     defected: Dict = data.get("defected_part_status", {}) or {}
-    _wb(ws, "C27", defected.get("returned",   False))
-    _wb(ws, "E27", defected.get("isolated",   False))
+    _wb(ws, "C27", defected.get("returned", False))
+    _wb(ws, "E27", defected.get("isolated", False))
     if defected.get("isolated"):
         _w(ws, "F27", f"Isolated — {_s(defected.get('isolated_location'))}")
         _wrap(ws, "F27")
@@ -362,40 +413,63 @@ def _fill_d3(
         _wrap(ws, "I27")
 
     LOC_ROWS = {
-        "supplier_site": 31, "in_transit": 32, "production_floor": 33,
-        "warehouse":     34, "customer_site": 35, "others": 36,
+        "supplier_site": 31,
+        "in_transit": 32,
+        "production_floor": 33,
+        "warehouse": 34,
+        "customer_site": 35,
+        "others": 36,
     }
     for rd in data.get("suspected_parts_status", []) or []:
         r = LOC_ROWS.get(rd.get("location", ""))
         if r:
-            for col, key in [("C","inventory"),("E","actions"),("G","leader"),("K","results")]:
+            for col, key in [
+                ("C", "inventory"),
+                ("E", "actions"),
+                ("G", "leader"),
+                ("K", "results"),
+            ]:
                 val = _s(rd.get(key))
                 _w(ws, f"{col}{r}", val)
-                if val: _wrap(ws, f"{col}{r}")
+                if val:
+                    _wrap(ws, f"{col}{r}")
 
     alert: Dict = data.get("alert_communicated_to", {}) or {}
     _wb(ws, "C37", alert.get("production_shift_leaders", False))
-    _wb(ws, "E37", alert.get("warehouse",                False))
-    _wb(ws, "H37", alert.get("customer_contact",         False))
-    _wb(ws, "C38", alert.get("quality_control",          False))
-    _wb(ws, "E38", alert.get("maintenance",              False))
-    _wb(ws, "H38", alert.get("production_planner",       False))
+    _wb(ws, "E37", alert.get("warehouse", False))
+    _wb(ws, "H37", alert.get("customer_contact", False))
+    _wb(ws, "C38", alert.get("quality_control", False))
+    _wb(ws, "E38", alert.get("maintenance", False))
+    _wb(ws, "H38", alert.get("production_planner", False))
 
     alert_num = _s(data.get("alert_number", ""))
-    _w(ws, "B38", f"Alert # (QRQC log or NCR #): {alert_num}" if alert_num else "Alert # (QRQC log or NCR #):")
+    _w(
+        ws,
+        "B38",
+        (
+            f"Alert # (QRQC log or NCR #): {alert_num}"
+            if alert_num
+            else "Alert # (QRQC log or NCR #):"
+        ),
+    )
 
     restart: Dict = data.get("restart_production", {}) or {}
     for coord, key in [
-        ("D40","when"), ("G40","first_certified_lot"), ("K40","identification"),
-        ("D41","approved_by"), ("D42","method"),
+        ("D40", "when"),
+        ("G40", "first_certified_lot"),
+        ("K40", "identification"),
+        ("D41", "approved_by"),
+        ("D42", "method"),
     ]:
         val = _s(restart.get(key))
         _w(ws, coord, val)
-        if val: _wrap(ws, coord)
+        if val:
+            _wrap(ws, coord)
 
     val = _s(data.get("containment_responsible"))
     _w(ws, "C44", val)
-    if val: _wrap(ws, "C44")
+    if val:
+        _wrap(ws, "C44")
 
     _, links = _categorise_files(db, d3_step)
     if links:
@@ -406,34 +480,42 @@ def _fill_d3(
 # D4 — Root cause  (4M + 5 Whys × 2)
 # =============================================================================
 
+
 def _fill_5whys(ws: Worksheet, whys: Dict, start: int) -> None:
     for i in range(5):
-        why  = (whys or {}).get(f"why_{i+1}", {}) or {}
+        why = (whys or {}).get(f"why_{i+1}", {}) or {}
         base = start + i * 6
         q = _s(why.get("question"))
         a = _s(why.get("answer"))
-        _w(ws, f"D{base}",   q)
+        _w(ws, f"D{base}", q)
         _w(ws, f"D{base+3}", a)
-        if q: _wrap(ws, f"D{base}");   _auto_height(ws, base,   q, 50)
-        if a: _wrap(ws, f"D{base+3}"); _auto_height(ws, base+3, a, 50)
+        if q:
+            _wrap(ws, f"D{base}")
+            _auto_height(ws, base, q, 50)
+        if a:
+            _wrap(ws, f"D{base+3}")
+            _auto_height(ws, base + 3, a, 50)
 
 
 def _fill_4m(ws: Worksheet, fourm: Dict, base: int) -> None:
-    for i, key in enumerate(["row_1","row_2","row_3"]):
-        rd = (fourm.get(key) or {})
-        r  = base + 1 + i
+    for i, key in enumerate(["row_1", "row_2", "row_3"]):
+        rd = fourm.get(key) or {}
+        r = base + 1 + i
         r2 = base + 6 + i
-        for col, fk in [("B","material"),("D","method"),("F","machine")]:
+        for col, fk in [("B", "material"), ("D", "method"), ("F", "machine")]:
             val = _s(rd.get(fk))
             _w(ws, f"{col}{r}", val)
-            if val: _wrap(ws, f"{col}{r}")
-        for col, fk in [("B","manpower"),("D","environment")]:
+            if val:
+                _wrap(ws, f"{col}{r}")
+        for col, fk in [("B", "manpower"), ("D", "environment")]:
             val = _s(rd.get(fk))
             _w(ws, f"{col}{r2}", val)
-            if val: _wrap(ws, f"{col}{r2}")
+            if val:
+                _wrap(ws, f"{col}{r2}")
     val = _s(fourm.get("selected_problem"))
     _w(ws, f"J{base+3}", val)
-    if val: _wrap(ws, f"J{base+3}")
+    if val:
+        _wrap(ws, f"J{base+3}")
 
 
 def _fill_d4(
@@ -442,21 +524,23 @@ def _fill_d4(
     db: Session,
     d4_step: Optional[ReportStep],
 ) -> None:
-    _fill_4m(ws,    data.get("four_m_occurrence",       {}) or {}, 48)
-    _fill_5whys(ws, data.get("five_whys_occurrence",    {}) or {}, 61)
+    _fill_4m(ws, data.get("four_m_occurrence", {}) or {}, 48)
+    _fill_5whys(ws, data.get("five_whys_occurrence", {}) or {}, 61)
     rc = data.get("root_cause_occurrence", {}) or {}
-    for coord, key in [("B91","root_cause"),("E91","validation_method")]:
+    for coord, key in [("B91", "root_cause"), ("E91", "validation_method")]:
         val = _s(rc.get(key))
         _w(ws, coord, val)
-        if val: _wrap(ws, coord)
+        if val:
+            _wrap(ws, coord)
 
-    _fill_4m(ws,    data.get("four_m_non_detection",    {}) or {}, 95)
+    _fill_4m(ws, data.get("four_m_non_detection", {}) or {}, 95)
     _fill_5whys(ws, data.get("five_whys_non_detection", {}) or {}, 106)
     rc2 = data.get("root_cause_non_detection", {}) or {}
-    for coord, key in [("B136","root_cause"),("E136","validation_method")]:
+    for coord, key in [("B136", "root_cause"), ("E136", "validation_method")]:
         val = _s(rc2.get(key))
         _w(ws, coord, val)
-        if val: _wrap(ws, coord)
+        if val:
+            _wrap(ws, coord)
 
     _, links = _categorise_files(db, d4_step)
     if links:
@@ -467,6 +551,7 @@ def _fill_d4(
 # D5 + D6 — Corrective actions & implementation
 # =============================================================================
 
+
 def _fill_d5_d6(
     ws: Worksheet,
     d5: Dict,
@@ -476,31 +561,35 @@ def _fill_d5_d6(
     d6_step: Optional[ReportStep],
 ) -> None:
     d6_occ = d6.get("corrective_actions_occurrence", []) or []
-    d6_det = d6.get("corrective_actions_detection",  []) or []
+    d6_det = d6.get("corrective_actions_detection", []) or []
 
     for idx, row in enumerate((d5.get("corrective_actions_occurrence", []) or [])[:2]):
-        r   = 142 + idx
+        r = 142 + idx
         d6r = d6_occ[idx] if idx < len(d6_occ) else {}
-        for col, key in [("B","action"),("F","responsible"),("G","due_date")]:
+        for col, key in [("B", "action"), ("F", "responsible"), ("G", "due_date")]:
             val = _s(row.get(key))
             _w(ws, f"{col}{r}", val)
-            if val: _wrap(ws, f"{col}{r}")
+            if val:
+                _wrap(ws, f"{col}{r}")
         _w(ws, f"I{r}", _s(d6r.get("imp_date", "")))
         val = _s(d6r.get("evidence", ""))
         _w(ws, f"K{r}", val)
-        if val: _wrap(ws, f"K{r}")
+        if val:
+            _wrap(ws, f"K{r}")
 
     for idx, row in enumerate((d5.get("corrective_actions_detection", []) or [])[:2]):
-        r   = 145 + idx
+        r = 145 + idx
         d6r = d6_det[idx] if idx < len(d6_det) else {}
-        for col, key in [("B","action"),("F","responsible"),("G","due_date")]:
+        for col, key in [("B", "action"), ("F", "responsible"), ("G", "due_date")]:
             val = _s(row.get(key))
             _w(ws, f"{col}{r}", val)
-            if val: _wrap(ws, f"{col}{r}")
+            if val:
+                _wrap(ws, f"{col}{r}")
         _w(ws, f"I{r}", _s(d6r.get("imp_date", "")))
         val = _s(d6r.get("evidence", ""))
         _w(ws, f"K{r}", val)
-        if val: _wrap(ws, f"K{r}")
+        if val:
+            _wrap(ws, f"K{r}")
 
     mon: Dict = d6.get("monitoring", {}) or {}
     _w(ws, "C149", _s(mon.get("monitoring_interval")))
@@ -527,6 +616,7 @@ def _fill_d5_d6(
 # D7 — Lessons learned / prevention
 # =============================================================================
 
+
 def _fill_d7(
     ws: Worksheet,
     data: Dict,
@@ -535,41 +625,68 @@ def _fill_d7(
 ) -> None:
     for idx, risk in enumerate((data.get("recurrence_risks", []) or [])[:3]):
         r = 168 + idx
-        for col, key in [("B","area_line_product"),("E","action_taken")]:
+        for col, key in [("B", "area_line_product"), ("E", "action_taken")]:
             val = _s(risk.get(key))
             _w(ws, f"{col}{r}", val)
-            if val: _wrap(ws, f"{col}{r}")
+            if val:
+                _wrap(ws, f"{col}{r}")
         _wb(ws, f"C{r}", bool(risk.get("similar_risk_present", False)))
 
     for idx, item in enumerate((data.get("lesson_disseminations", []) or [])[:3]):
         r = 174 + idx
-        for col, key in [("B","audience_team"),("D","method"),("F","date"),("G","owner"),("J","evidence")]:
+        for col, key in [
+            ("B", "audience_team"),
+            ("D", "method"),
+            ("F", "date"),
+            ("G", "owner"),
+            ("J", "evidence"),
+        ]:
             val = _s(item.get(key))
             _w(ws, f"{col}{r}", val)
-            if val: _wrap(ws, f"{col}{r}")
+            if val:
+                _wrap(ws, f"{col}{r}")
 
     for idx, item in enumerate((data.get("replication_validations", []) or [])[:3]):
         r = 179 + idx
-        for col, key in [("B","line_site"),("C","action_replicated"),("F","confirmation_method"),("G","confirmed_by")]:
+        for col, key in [
+            ("B", "line_site"),
+            ("C", "action_replicated"),
+            ("F", "confirmation_method"),
+            ("G", "confirmed_by"),
+        ]:
             val = _s(item.get(key))
             _w(ws, f"{col}{r}", val)
-            if val: _wrap(ws, f"{col}{r}")
+            if val:
+                _wrap(ws, f"{col}{r}")
 
     for idx, item in enumerate((data.get("knowledge_base_updates", []) or [])[:3]):
         r = 184 + idx
-        for col, key in [("B","document_type"),("C","topic_reference"),("F","owner"),("G","location_link")]:
+        for col, key in [
+            ("B", "document_type"),
+            ("C", "topic_reference"),
+            ("F", "owner"),
+            ("G", "location_link"),
+        ]:
             val = _s(item.get(key))
             _w(ws, f"{col}{r}", val)
-            if val: _wrap(ws, f"{col}{r}")
+            if val:
+                _wrap(ws, f"{col}{r}")
 
     LT_FREQ_COL = {189: "D", 190: "C", 191: "D"}
     for idx, item in enumerate((data.get("long_term_monitoring", []) or [])[:3]):
-        r        = 189 + idx
+        r = 189 + idx
         freq_col = LT_FREQ_COL[r]
-        for col, key in [("B","checkpoint_type"),(freq_col,"frequency"),("F","owner"),("G","start_date"),("L","notes")]:
+        for col, key in [
+            ("B", "checkpoint_type"),
+            (freq_col, "frequency"),
+            ("F", "owner"),
+            ("G", "start_date"),
+            ("L", "notes"),
+        ]:
             val = _s(item.get(key))
             _w(ws, f"{col}{r}", val)
-            if val: _wrap(ws, f"{col}{r}")
+            if val:
+                _wrap(ws, f"{col}{r}")
 
     val = _s(data.get("ll_conclusion"))
     _w(ws, "B193", val)
@@ -586,6 +703,7 @@ def _fill_d7(
 # D8 — Closure
 # =============================================================================
 
+
 def _fill_d8(
     ws: Worksheet,
     data: Dict,
@@ -595,11 +713,18 @@ def _fill_d8(
     closure = _s(data.get("closure_statement", ""))
     sigs: Dict = data.get("signatures", {}) or {}
     parts = []
-    if sigs.get("closed_by"):    parts.append(f"Closed by: {_s(sigs['closed_by'])}")
-    if sigs.get("closure_date"): parts.append(f"Date: {_s(sigs['closure_date'])}")
-    if sigs.get("approved_by"):  parts.append(f"Approved by: {_s(sigs['approved_by'])}")
+    if sigs.get("closed_by"):
+        parts.append(f"Closed by: {_s(sigs['closed_by'])}")
+    if sigs.get("closure_date"):
+        parts.append(f"Date: {_s(sigs['closure_date'])}")
+    if sigs.get("approved_by"):
+        parts.append(f"Approved by: {_s(sigs['approved_by'])}")
     sig_line = "  |  ".join(parts)
-    full = (closure + "\n\n" + sig_line) if (closure and sig_line) else (closure or sig_line)
+    full = (
+        (closure + "\n\n" + sig_line)
+        if (closure and sig_line)
+        else (closure or sig_line)
+    )
     _w(ws, "B199", full)
     if full:
         _wrap(ws, "B199")
@@ -613,6 +738,7 @@ def _fill_d8(
 # =============================================================================
 # SERVICE
 # =============================================================================
+
 
 class ReportExportService:
 
@@ -630,11 +756,15 @@ class ReportExportService:
         wb = load_workbook(TEMPLATE_PATH)
         ws = wb["Sheet1"]
 
-        _w(ws, "B2", (
-            f"PROBLEM SOLVING - 8D METHOD  |  "
-            f"{_s(report.report_number)}  |  "
-            f"{_s(complaint.complaint_name)}"
-        ))
+        _w(
+            ws,
+            "B2",
+            (
+                f"PROBLEM SOLVING - 8D METHOD  |  "
+                f"{_s(report.report_number)}  |  "
+                f"{_s(complaint.complaint_name)}"
+            ),
+        )
 
         _fill_d1(ws, _step_data(steps, "D1"))
         _fill_d2(ws, _step_data(steps, "D2"), db, steps.get("D2"))
@@ -664,7 +794,7 @@ class ReportExportService:
         name = name.replace(" ", "_").replace("/", "-")
         name = _safe_filename(name)
         return f"8D_{_s(report.report_number)}_{name}.xlsx"
-    
+
     @staticmethod
     # def is_report_ready(report: Optional[Report]) -> bool:
     #         if not report:
@@ -688,37 +818,32 @@ class ReportExportService:
 
     @staticmethod
     def has_export_for_complaint(db: Session, complaint_id: int) -> bool:
-            report = (
-                db.query(Report)
-                .filter(Report.complaint_id == complaint_id)
-                .first()
-            )
-            return ReportExportService.is_report_ready(report)
+        report = db.query(Report).filter(Report.complaint_id == complaint_id).first()
+        return ReportExportService.is_report_ready(report)
 
     @staticmethod
     def get_export_meta_for_complaint(db: Session, complaint_id: int) -> Dict[str, Any]:
-            report = (
-                db.query(Report)
-                .filter(Report.complaint_id == complaint_id)
-                .first()
-            )
+        report = db.query(Report).filter(Report.complaint_id == complaint_id).first()
 
-            if not report:
-                return {
-                    "has_export_report": False,
-                    "export_filename": None,
-                }
-
-            ready = ReportExportService.is_report_ready(report)
-
+        if not report:
             return {
-                "has_export_report": ready,
-                "export_filename": ReportExportService.get_filename(db, report.id) if ready else None,
+                "has_export_report": False,
+                "export_filename": None,
             }
+
+        ready = ReportExportService.is_report_ready(report)
+
+        return {
+            "has_export_report": ready,
+            "export_filename": (
+                ReportExportService.get_filename(db, report.id) if ready else None
+            ),
+        }
+
     @staticmethod
     async def save_to_github(db: Session, report_id: int) -> str:
         """Generate Excel, push to GitHub reports folder, return URL."""
         file_bytes = ReportExportService.generate_excel(db, report_id)
-        filename   = ReportExportService.get_filename(db, report_id)
-        result     = await storage.upload_report(file_bytes, filename)
+        filename = ReportExportService.get_filename(db, report_id)
+        result = await storage.upload_report(file_bytes, filename)
         return result["url"]

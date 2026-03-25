@@ -11,7 +11,6 @@ class MemberDirectory:
         self.db = db
 
     def search(self, query: str, limit: int = 5) -> List[AvoMember]:
-
         q = f"%{query.strip()}%"
 
         return (
@@ -19,7 +18,12 @@ class MemberDirectory:
             .filter(
                 or_(
                     AvoMember.name.ilike(q),
-                    AvoMember.email.ilike(q)
+                    AvoMember.email.ilike(q),
+                    AvoMember.role.ilike(q),  # ← ajouté
+                    AvoMember.department.ilike(q),  # ← ajouté
+                    AvoMember.city.ilike(q),  # ← ajouté
+                    AvoMember.office.ilike(q),  # ← ajouté
+                    AvoMember.region.ilike(q),  # ← ajouté
                 )
             )
             .limit(limit)

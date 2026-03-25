@@ -1,7 +1,9 @@
 import enum
 
+
 class ProductLineEnum(str, enum.Enum):
     """Product line categories"""
+
     ASSEMBLY = "ASSEMBLY"
     BRUSH = "BRUSH"
     CHOKE = "CHOKE"
@@ -11,6 +13,7 @@ class ProductLineEnum(str, enum.Enum):
 
 class PlantEnum(str, enum.Enum):
     """Manufacturing plant locations"""
+
     MONTERREY = "MONTERREY"
     KUNSHAN = "KUNSHAN"
     CHENNAI = "CHENNAI"

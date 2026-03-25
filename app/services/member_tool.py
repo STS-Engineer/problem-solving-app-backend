@@ -55,27 +55,36 @@ MEMBER_LOOKUP_TOOL: Dict[str, Any] = {
 # TOOL EXECUTOR
 # =============================================================================
 
+
 def execute_member_lookup(query: str, db: Session) -> str:
     """
     Run the member directory search and return a JSON string
     suitable for sending back to OpenAI as a tool result.
     """
     directory = MemberDirectory(db)
-    members   = directory.search(query, limit=5)
+    members = directory.search(query, limit=5)
 
     if not members:
-        return json.dumps({"found": 0, "members": [], "hint": "No match found. Ask the user to clarify the name."})
+        return json.dumps(
+            {
+                "found": 0,
+                "members": [],
+                "hint": "No match found. Ask the user to clarify the name.",
+            }
+        )
 
     results = []
     for m in members:
-        results.append({
-            "id":         m.id,
-            "name":       m.name,
-            "email":      m.email       or "",
-            "department": m.department  or "",
-            "role":       m.role        or "",
-            "city":       m.city        or "",
-            "office":     m.office      or "",
-        })
+        results.append(
+            {
+                "id": m.id,
+                "name": m.name,
+                "email": m.email or "",
+                "department": m.department or "",
+                "role": m.role or "",
+                "city": m.city or "",
+                "office": m.office or "",
+            }
+        )
 
     return json.dumps({"found": len(results), "members": results})

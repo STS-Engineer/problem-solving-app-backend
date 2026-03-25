@@ -23,11 +23,6 @@ def test_members(query: str, db: Session = Depends(get_db)):
     members = directory.search(query)
 
     return [
-        {
-            "name": m.name,
-            "email": m.email,
-            "department": m.department,
-            "role": m.role
-        }
+        {"name": m.name, "email": m.email, "department": m.department, "role": m.role}
         for m in members
     ]
