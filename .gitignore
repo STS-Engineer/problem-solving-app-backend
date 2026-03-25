@@ -19,3 +19,13 @@ reports/
 uploads/
 
 scripts/
+
+.flake8
+
+sync_monday_to_db.py
+
+complaint.html
+
+complaints_data.json
+
+pyproject.toml
