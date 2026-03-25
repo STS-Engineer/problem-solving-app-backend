@@ -14,24 +14,21 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.api.router import api_router
+from app.core.config import get_webhook_settings
 from app.db.session import AsyncSessionLocal, async_engine
 from app.services.scheduler import is_scheduler_running, start_scheduler, stop_scheduler
-
- 
-import logging
-from contextlib import asynccontextmanager
- 
-from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI
- 
-from app.core.config import get_webhook_settings
-from app.services.webhook_service import prune_old_jobs, recover_locked_jobs, run_one_poll
-
+from app.services.webhook_service import (
+    prune_old_jobs,
+    recover_locked_jobs,
+    run_one_poll,
+)
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
+
 
 def _configure_logging() -> None:
     # 1. Define the format
@@ -84,18 +81,11 @@ if extra := os.getenv("FRONTEND_URL"):
     origins.append(extra)
 
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    logger.info("Starting AVOCarbon API...")
-
-=======
 # ── Lifespan ──────────────────────────────────────────────────────────────────
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting AVOCarbon Complaints API...")
- 
+
     # Verify DB is reachable before accepting traffic
     try:
         async with AsyncSessionLocal() as db:
@@ -104,8 +94,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.critical("Cannot connect to database at startup: %s", exc)
         raise
- 
+
     start_scheduler()
+    cfg = get_webhook_settings()
+
+    scheduler = BackgroundScheduler(
+        job_defaults={
+            "coalesce": True,  # skip missed runs, never stack
+            "max_instances": 1,  # one instance of each job per process
+            "misfire_grace_time": 60,
+        }
+    )
     # ── Job 1: delivery worker ────────────────────────────────────────────────
     # Picks up one pending WebhookJob and delivers it.
     # 120 s is a safe default for your complaint volume.
@@ -148,16 +147,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     #
     # To change the schedule, adjust `day`, `hour`, `minute` below or set
     # environment variables KPI_REPORT_DAY / KPI_REPORT_HOUR.
-    scheduler.add_job(
-        _run_monthly_kpi_reports,
-        trigger="cron",
-        day=int(os.getenv("KPI_REPORT_DAY", "24")),
-        hour=int(os.getenv("KPI_REPORT_HOUR", "15")),
-        minute=58,
-        id="monthly_kpi_report",
-        name="Monthly KPI PDF email report",
-        replace_existing=True,
-    )
+    # scheduler.add_job(
+    #     _run_monthly_kpi_reports,
+    #     trigger="cron",
+    #     day=int(os.getenv("KPI_REPORT_DAY", "24")),
+    #     hour=int(os.getenv("KPI_REPORT_HOUR", "15")),
+    #     minute=58,
+    #     id="monthly_kpi_report",
+    #     name="Monthly KPI PDF email report",
+    #     replace_existing=True,
+    # )
 
     scheduler.start()
     logger.info(
@@ -170,14 +169,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     for job in scheduler.get_jobs():
         logger.info("  ↳ %-40s next run: %s", job.name, job.next_run_time)
 
- 
-    scheduler.start()
-    logger.info(
-        "Scheduler started — jobs: poll=%ds, recovery=900s, prune=daily@03:00 UTC | "
-        "targets=%d",
-        cfg.webhook_poll_interval,
-        len(cfg.target_urls),
-    )
     yield
     # ── Graceful shutdown ─────────────────────────────────────────────────────
     logger.info("Shutting down scheduler...")
@@ -219,7 +210,7 @@ async def readiness() -> JSONResponse:
     entire app offline — the webhook delivery is best-effort.
     """
     checks: dict[str, str] = {}
- 
+
     try:
         async with AsyncSessionLocal() as db:
             await db.execute(text("SELECT 1"))
@@ -229,11 +220,8 @@ async def readiness() -> JSONResponse:
 
     checks["scheduler"] = "ok" if is_scheduler_running() else "stopped"
 
-
     overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
     return JSONResponse(
         content={"status": overall, "checks": checks},
         status_code=200 if overall == "ok" else 503,
     )
-
-

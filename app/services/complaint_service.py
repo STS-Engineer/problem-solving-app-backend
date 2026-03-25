@@ -13,17 +13,12 @@ from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
 
 # from app.services import webhook_service
 from app.services.auto_extraction import auto_fill_from_complaint
-<<<<<<< Updated upstream
-from app.services.utils.report_helpers import generate_report_number, get_8d_steps_definitions
-# from app.services.webhook_service import enqueue_webhook
-=======
 from app.services.utils.report_helpers import (
     generate_report_number,
     get_8d_steps_definitions,
 )
 
-# from app.services.webhook_service import enqueue_complaint_created,enqueue_type_updated
->>>>>>> Stashed changes
+# from app.services.webhook_service import enqueue_webhook
 
 
 def generate_complaint_number():
@@ -139,13 +134,8 @@ class ComplaintService:
         # Runs AFTER commit so all step IDs exist in the DB.
         # Non-fatal: a failure here never rolls back the complaint.
         try:
-<<<<<<< Updated upstream
             auto_fill_from_complaint(db, complaint, created_steps)  # ← ADD
-            db.commit()                                              # ← ADD
-=======
-            auto_fill_from_complaint(db, complaint, created_steps)
-            db.commit()
->>>>>>> Stashed changes
+            db.commit()  # ← ADD
         except Exception as exc:
             import logging as _log
 
@@ -274,11 +264,6 @@ class ComplaintService:
         complaint = ComplaintService.get_complaint_by_id(db, complaint_id)
         if not complaint:
             return None
-<<<<<<< Updated upstream
-
-=======
-        old_type = complaint.quality_issue_warranty
->>>>>>> Stashed changes
         data = payload.model_dump(exclude_unset=True)
 
         # Track if status changed to closed
@@ -297,20 +282,11 @@ class ComplaintService:
         db.add(complaint)
         db.commit()
         db.refresh(complaint)
-<<<<<<< Updated upstream
         # Send webhook notification for updates
-        event_type = "complaint.closed" if status_changed_to_closed else "complaint.updated"
-        
-=======
-        new_type = payload.quality_issue_warranty
-        # if old_type != new_type:
-        # enqueue_type_updated(db, complaint, old_type, new_type)
-        # TODO we must handle case of status changes
+        event_type = (
+            "complaint.closed" if status_changed_to_closed else "complaint.updated"
+        )
 
-        # Send webhook notification for updates
-        # event_type = "complaint.closed" if status_changed_to_closed else "complaint.updated"
-
->>>>>>> Stashed changes
         # webhook_service.send_webhook_background(
         #     event_type=event_type,
         #     complaint_data={

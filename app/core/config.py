@@ -1,8 +1,9 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     DATABASE_URL: str
@@ -14,6 +15,21 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+class WebhookSettings(BaseSettings):
+    # Shared HMAC-SHA256 signing secret — must match the audit app's secret
+    webhook_secret: str = ""
+
+    # Single target URL — the audit app's receiver endpoint
+    webhook_target: str = ""
+
+    # Tuning (override in Azure config if needed, defaults are fine)
+    webhook_timeout_sec: int = 10
+    webhook_max_attempts: int = 3
+    webhook_poll_interval: int = 300  # seconds between DB polls
+    webhook_trigger_types: str = "CS1,CS2"
+
     # Comma-separated emails to alert when a job permanently fails
     # e.g. "admin@avocarbon.com,devops@avocarbon.com"
     # Leave empty to disable email alerts
