@@ -309,8 +309,8 @@ def _process_step(db: Session, step: ReportStep) -> bool:
                 "missed_by_hours": round(hours, 2),
             },
         )
-        step.is_overdue = True
-        step.status = "overdue"
+        # step.is_overdue = True
+        # step.status = "overdue"
 
     # Record attempt timestamp (not success — just that we tried)
     step.escalation_sent_at = utc_now()
