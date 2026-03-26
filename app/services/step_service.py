@@ -12,32 +12,11 @@ from app.core.exceptions import (
 from app.models.complaint import Complaint
 from app.models.report import Report
 from app.models.report_step import ReportStep
-from app.schemas.step_data import (
-    D1Data,
-    D2Data,
-    D3Data,
-    D4Data,
-    D5Data,
-    D6Data,
-    D7Data,
-    D8Data,
-)
+
 
 logger = logging.getLogger(__name__)
 
-STEP_SCHEMAS = {
-    "D1": D1Data,
-    "D2": D2Data,
-    "D3": D3Data,
-    "D4": D4Data,
-    "D5": D5Data,
-    "D6": D6Data,
-    "D7": D7Data,
-    "D8": D8Data,
-}
-
-VALID_STEP_CODES = tuple(STEP_SCHEMAS.keys())
-
+VALID_STEP_CODES = ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
 
 class StepService:
     @staticmethod
