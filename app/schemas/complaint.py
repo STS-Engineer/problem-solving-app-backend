@@ -117,6 +117,7 @@ class ComplaintListItem(BaseModel):
     cqt_email: Optional[str]
     quality_manager_email: Optional[str]
     plant_manager_email: Optional[str]
+    is_overdue:Optional[bool]
 
     class Config:
         from_attributes = True

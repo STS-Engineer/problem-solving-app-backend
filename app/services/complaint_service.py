@@ -28,8 +28,6 @@ def generate_complaint_number():
 
 
 # ── SLA days per step code ─────────────────────────────────────────────────────
-# Matches the escalation ladder: overdue = now > due_date.
-# Adjust these to your company's actual SLA commitments.
 _STEP_SLA_DAYS: dict[str, int] = {
     "D1": 1,
     "D2": 2,
@@ -43,15 +41,10 @@ _STEP_SLA_DAYS: dict[str, int] = {
 
 
 def _due_date_for_step(step_code: str, created_at: datetime) -> datetime | None:
-    """
-    Return the due_date for a step given the complaint creation timestamp.
-    Returns None for unknown step codes (safe fallback — scheduler skips them).
-    """
     days = _STEP_SLA_DAYS.get(step_code)
     if days is None:
         return None
-    delta_hours = days * 24
-    return created_at + timedelta(hours=delta_hours)
+    return created_at + timedelta(days=days)
 
 
 PRIORITY_MAPPING = {
@@ -60,40 +53,35 @@ PRIORITY_MAPPING = {
     "WR": "medium",
     "Quality Alert": "low",
 }
+
 _STEP_ORDER = ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
 
 # Postgres CASE WHEN ordering for step codes
 _STEP_PRIORITY = case(
-    *[(ReportStep.step_code == code, i) for i, code in enumerate(_STEP_ORDER)], else_=99
+    *[(ReportStep.step_code == code, i) for i, code in enumerate(_STEP_ORDER)],
+    else_=99,
 )
 
 
 class ComplaintService:
+
     @staticmethod
     def create_complaint(
         db: Session,
         payload: ComplaintCreate,
     ) -> Complaint:
-        """
-        Crée une plainte et optionnellement initialise un rapport 8D
-
-        Args:
-            db: Session de base de données
-            payload: Données de la plainte
-            create_report: Si True, crée automatiquement un rapport 8D
-            report_title: Titre du rapport (optionnel, sinon utilise le nom de la plainte)
-        """
-        # ── 1. Create complaint  ───────────────────────────────────
+        # ── 1. Create complaint — status always starts as "open" ───────────────
         complaint = Complaint(**payload.model_dump())
         complaint.reference_number = generate_complaint_number()
         complaint.priority = PRIORITY_MAPPING.get(payload.quality_issue_warranty, "low")
+        complaint.status = "open"  # explicit — never a step code
         created_at = datetime.now(timezone.utc)
         if not complaint.due_date:
             complaint.due_date = created_at + timedelta(days=30)
         db.add(complaint)
         db.flush()
 
-        # ── 2. Create report (UNCHANGED) ──────────────────────────────────────
+        # ── 2. Create linked report ────────────────────────────────────────────
         report = Report(
             complaint_id=complaint.id,
             report_number=generate_report_number(),
@@ -105,10 +93,9 @@ class ComplaintService:
         db.add(report)
         db.flush()
 
-        # ── 3. Create 8 steps — collect the step objects now  ← SMALL CHANGE ─
-        # (original used a loop without keeping references; we keep them for auto-fill)
+        # ── 3. Create 8 steps — all start as "not_started" ────────────────────
         steps_definitions = get_8d_steps_definitions()
-        created_steps = []  # ← ADD
+        created_steps = []
 
         for step_def in steps_definitions:
             step_code: str = step_def["code"]
@@ -117,25 +104,22 @@ class ComplaintService:
                 report_id=report.id,
                 step_code=step_code,
                 step_name=step_def["name"],
-                status="not_started",
+                status="not_started",  # never "draft"
                 data={},
                 due_date=due_date,
             )
             db.add(step)
-            db.flush()  # ← ADD (get step.id)
-            created_steps.append(step)  # ← ADD
+            db.flush()
+            created_steps.append(step)
 
         # enqueue_webhook(db, complaint)
         db.commit()
         db.refresh(complaint)
 
-        # ── 4. Auto-fill step data from complaint description  ← ADD BLOCK ───
-        #
-        # Runs AFTER commit so all step IDs exist in the DB.
-        # Non-fatal: a failure here never rolls back the complaint.
+        # ── 4. Auto-fill step data from complaint description ─────────────────
         try:
-            auto_fill_from_complaint(db, complaint, created_steps)  # ← ADD
-            db.commit()  # ← ADD
+            auto_fill_from_complaint(db, complaint, created_steps)
+            db.commit()
         except Exception as exc:
             import logging as _log
 
@@ -148,20 +132,17 @@ class ComplaintService:
                 db.rollback()
             except Exception:
                 pass
-        # ── end ADD block ─────────────────────────────────────────────────────
 
         return complaint
 
     @staticmethod
     def get_complaint_by_id(db: Session, complaint_id: int) -> Optional[Complaint]:
-        """Récupère une plainte par son ID"""
         return db.query(Complaint).filter(Complaint.id == complaint_id).first()
 
     @staticmethod
     def get_complaint_by_reference(
         db: Session, reference_number: str
     ) -> Optional[Complaint]:
-        """Récupère une plainte par son numéro de référence"""
         return (
             db.query(Complaint)
             .filter(Complaint.reference_number == reference_number)
@@ -177,9 +158,9 @@ class ComplaintService:
         product_line: Optional[str] = None,
         cqt_email: Optional[str] = None,
     ) -> List[Complaint]:
-        # ── Subquery: first non-fulfilled step code per report ─────────────────
-        # Uses a correlated subquery ordered by D1→D8 priority.
-        # Returns NULL when all steps are fulfilled (= all_completed).
+        now = datetime.now(timezone.utc)
+
+        # ── Subquery 1: first non-fulfilled step code ──────────────────────────
         first_open_step = (
             select(ReportStep.step_code)
             .where(
@@ -194,7 +175,23 @@ class ComplaintService:
             .scalar_subquery()
         )
 
-        # ── Subquery: does this complaint have ALL 8 steps fulfilled? ──────────
+        # ── Subquery 2: due_date of that first non-fulfilled step ──────────────
+        # Used to compute is_overdue without a second round-trip.
+        first_open_due = (
+            select(ReportStep.due_date)
+            .where(
+                and_(
+                    ReportStep.report_id == Report.id,
+                    ReportStep.status != "fulfilled",
+                )
+            )
+            .order_by(_STEP_PRIORITY)
+            .limit(1)
+            .correlate(Report)
+            .scalar_subquery()
+        )
+
+        # ── Subquery 3: count of fulfilled steps ───────────────────────────────
         fulfilled_count = (
             select(func.count())
             .where(
@@ -207,15 +204,17 @@ class ComplaintService:
             .scalar_subquery()
         )
 
-        # ── Main query: complaints LEFT JOIN reports ───────────────────────────
+        # ── Main query ─────────────────────────────────────────────────────────
         q = db.query(
             Complaint,
             Report.id.label("report_id"),
             Report.report_number.label("report_number"),
             first_open_step.label("first_open_step"),
+            first_open_due.label("first_open_due"),
             fulfilled_count.label("fulfilled_count"),
         ).outerjoin(Report, Report.complaint_id == Complaint.id)
 
+        # Filter on the clean status values ("open", "in_progress", "closed")
         if status:
             q = q.filter(Complaint.status == status)
         if product_line:
@@ -225,34 +224,47 @@ class ComplaintService:
 
         rows = q.order_by(Complaint.created_at.desc()).offset(skip).limit(limit).all()
 
-        # ── Build result list ─────────────────────────────────────────────────
         results = []
-        for complaint, report_id, report_number, first_open, fulfilled in rows:
+        for complaint, report_id, report_number, first_open, first_open_due_val, fulfilled in rows:
             has_report = report_id is not None
             all_completed = has_report and first_open is None and fulfilled == 8
             has_export = all_completed
 
-            # current_step_code logic mirrors your existing get_current_step endpoint
+            # ── current_step_code ──────────────────────────────────────────────
+            # None  → no report yet (complaint is "open")
+            # "D3"  → currently working this step
+            # "D8"  → all done
             if not has_report:
-                current_step_code = (complaint.status or "open").upper()
+                current_step_code = None
             elif all_completed:
                 current_step_code = "D8"
             else:
-                current_step_code = first_open  # e.g. "D3"
+                current_step_code = first_open
 
-            # export_filename only computed when ready (avoids a query)
+            # ── is_overdue (computed, never stored on complaint) ───────────────
+            # True when the current active step has passed its due_date.
+            # Closed complaints are never overdue.
+            is_overdue = False
+            if complaint.status != "closed" and first_open_due_val is not None:
+                due = first_open_due_val
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=timezone.utc)
+                is_overdue = now > due
+
+            # ── export filename ────────────────────────────────────────────────
             export_filename = None
             if has_export and report_number:
                 name = (complaint.complaint_name or "")[:40]
                 name = name.replace(" ", "_").replace("/", "-")
                 export_filename = f"8D_{report_number}_{name}.xlsx"
 
-            # Attach computed attrs so Pydantic's from_attributes picks them up
             setattr(complaint, "has_export_report", has_export)
             setattr(complaint, "export_filename", export_filename)
             setattr(complaint, "current_step_code", current_step_code)
             setattr(complaint, "all_completed", all_completed)
             setattr(complaint, "has_report", has_report)
+            setattr(complaint, "is_overdue", is_overdue)  
+
             results.append(complaint)
 
         return results
@@ -266,7 +278,6 @@ class ComplaintService:
             return None
         data = payload.model_dump(exclude_unset=True)
 
-        # Track if status changed to closed
         status_changed_to_closed = False
         if (
             "status" in data
@@ -314,7 +325,6 @@ class ComplaintService:
         complaint = ComplaintService.get_complaint_by_id(db, complaint_id)
         if not complaint:
             return False
-
         db.delete(complaint)
         db.commit()
         return True
