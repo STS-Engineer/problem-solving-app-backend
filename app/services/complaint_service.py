@@ -2,11 +2,14 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 import random
 import string
+from fastapi import HTTPException
 from sqlalchemy import and_, or_, select, func, case
 
 from sqlalchemy.orm import Session
 
+from app.core.email import _send_sync
 from app.models.complaint import Complaint
+from app.models.complaint_audit_log import ComplaintAuditLog
 from app.models.report import Report
 from app.models.report_step import ReportStep
 from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
@@ -17,7 +20,9 @@ from app.services.utils.report_helpers import (
     generate_report_number,
     get_8d_steps_definitions,
 )
+import logging
 
+logger = logging.getLogger(__name__)
 # from app.services.webhook_service import enqueue_webhook
 
 
@@ -358,3 +363,126 @@ class ComplaintService:
         )
 
         return query.order_by(Complaint.created_at.desc()).all()
+
+    @staticmethod
+    def cancel_complaint(
+    db: Session,
+    reference_number: str,
+    cqt_email_input: str,
+    reason:str
+) -> Complaint:
+        """
+        Cancel a complaint after verifying the caller's CQT email.
+        Sends notification emails to cqt_email and quality_manager_email.
+        """
+        result =db.execute(
+            select(Complaint).where(Complaint.reference_number == reference_number)
+        )
+        complaint = result.scalar_one_or_none()
+
+        if complaint is None:
+            raise HTTPException(status_code=404, detail="Complaint not found")
+
+        if complaint.status != "open":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Only open complaints can be cancelled (current status: {complaint.status})",
+            )
+        # ── Email verification ───────────────────────────────────────────────────
+        if not complaint.cqt_email:
+            raise HTTPException(
+                status_code=400,
+                detail="No CQT email is set on this complaint — cannot verify identity",
+            )
+
+        if complaint.cqt_email.strip().lower() != cqt_email_input.strip().lower():
+            raise HTTPException(
+                status_code=403,
+                detail="CQT email does not match — cancellation refused",
+            )
+        previous_status = complaint.status
+        # ── Update status ────────────────────────────────────────────────────────
+        complaint.status = "cancelled"
+        complaint.closed_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(complaint)
+        recipients_notified = [complaint.cqt_email]
+        if complaint.quality_manager_email:
+            recipients_notified.append(complaint.quality_manager_email)
+
+        audit = ComplaintAuditLog(
+            complaint_id=complaint.id,
+            event_type="status_changed",
+            performed_by_email=cqt_email_input.strip().lower(),
+            event_data={
+                "previous_status": previous_status,   # capture before update — see note
+                "new_status": "cancelled",
+                "cancelled_at": complaint.closed_at.isoformat(),
+                "notification_sent_to": recipients_notified,
+                "reason":reason
+            },
+        )
+        db.add(audit)
+        db.commit()
+        # ── Build email ──────────────────────────────────────────────────────────
+        subject = f"[AVOCarbon] Complaint #{complaint.reference_number} — Cancelled"
+        body_html = f"""
+        <div style="font-family:Inter,Arial,sans-serif;max-width:600px;margin:0 auto;
+                    background:#f9fafb;padding:32px;border-radius:10px;">
+        <div style="background:#fff;border-radius:8px;padding:28px;
+                    border-left:4px solid #D93025;box-shadow:0 2px 8px rgba(0,0,0,0.07);">
+            <h2 style="margin:0 0 4px;color:#1A2332;font-size:18px;">
+            Complaint Cancelled
+            </h2>
+            <p style="margin:0 0 20px;color:#8A95A8;font-size:13px;">
+            #{complaint.reference_number}
+            </p>
+
+            <table style="width:100%;border-collapse:collapse;font-size:13px;color:#4A5568;">
+            <tr>
+                <td style="padding:7px 0;font-weight:700;width:40%;color:#1A2332;">
+                Complaint Name
+                </td>
+                <td style="padding:7px 0;">{complaint.complaint_name}</td>
+            </tr>
+            <tr style="background:#f5f6f8;">
+                <td style="padding:7px 6px;font-weight:700;color:#1A2332;">Customer</td>
+                <td style="padding:7px 6px;">{complaint.customer or "—"}</td>
+            </tr>
+            <tr>
+                <td style="padding:7px 0;font-weight:700;color:#1A2332;">Plant</td>
+                <td style="padding:7px 0;">{complaint.avocarbon_plant or "—"}</td>
+            </tr>
+            <tr style="background:#f5f6f8;">
+                <td style="padding:7px 6px;font-weight:700;color:#1A2332;">Cancelled at</td>
+                <td style="padding:7px 6px;">
+                {complaint.closed_at.strftime("%d %b %Y, %H:%M UTC")}
+                </td>
+                <tr>
+                <td style="padding:7px 0;font-weight:700;color:#1A2332;">Reason</td>
+                <td style="padding:7px 0;">{reason or "—"}</td>
+            </tr>
+            </tr>
+            </table>
+
+            <p style="margin:20px 0 0;font-size:12px;color:#8A95A8;border-top:1px solid #eee;
+                    padding-top:16px;">
+            This complaint has been cancelled and is now read-only.<br>
+            If this was a mistake, please contact your quality manager.
+            </p>
+        </div>
+        </div>
+        """
+
+        recipients: list[str] = [complaint.cqt_email]
+        cc: list[str] = []
+        if complaint.quality_manager_email:
+            cc.append(complaint.quality_manager_email)
+
+        try:
+            _send_sync(subject=subject, recipients=recipients, body_html=body_html, cc=cc)
+        except Exception as exc:
+            logger.warning("Cancel email failed for %s: %s", reference_number, exc)
+            # Don't rollback — the complaint IS cancelled; email is best-effort
+
+        return complaint

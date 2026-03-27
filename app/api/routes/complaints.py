@@ -1,6 +1,8 @@
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -94,3 +96,28 @@ def delete_complaint(complaint_id: int, db: Session = Depends(get_db)) -> None:
     success = ComplaintService.delete_complaint(db, complaint_id)
     if not success:
         raise HTTPException(status_code=404, detail="Complaint not found")
+
+class CancelComplaintRequest(BaseModel):
+    cqt_email: str
+    reason:str
+class ComplaintResponse(BaseModel):
+    # ... existing fields ...
+    status: str
+    closed_at: datetime | None = None
+
+@router.post(
+    "/{reference_number}/cancel",
+    response_model=ComplaintResponse,
+    summary="Cancel a complaint (CQT email confirmation required)",
+)
+def cancel_complaint(
+    reference_number: str,
+    payload: CancelComplaintRequest,
+    db: Session = Depends(get_db),
+):
+    return  ComplaintService.cancel_complaint(
+        db=db,
+        reference_number=reference_number,
+        cqt_email_input=payload.cqt_email,
+        reason=payload.reason
+    )
