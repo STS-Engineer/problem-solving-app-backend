@@ -70,6 +70,33 @@ def export_by_report_id(
     return _stream_excel(db, report.id)
 
 
+@router.get("/complaint/{complaint_id}/d3-pdf")
+@router.get("/complaint/{complaint_id}/d1-d3-pdf")
+def export_d1_d3_pdf(
+    complaint_id: str,
+    db: Session = Depends(get_db),
+):
+    return _stream_partial_pdf(
+        db=db,
+        complaint_id=complaint_id,
+        export_kind="d1_d3",
+        filename_prefix="8D_D1-D3_report",
+    )
+
+
+@router.get("/complaint/{complaint_id}/d1-d5-pdf")
+def export_d1_d5_pdf(
+    complaint_id: str,
+    db: Session = Depends(get_db),
+):
+    return _stream_partial_pdf(
+        db=db,
+        complaint_id=complaint_id,
+        export_kind="d1_d5",
+        filename_prefix="8D_D1-D5_report",
+    )
+
+
 # ── shared helper ─────────────────────────────────────────────────────────────
 
 
@@ -154,12 +181,53 @@ def _stream_excel(db: Session, report_id: int) -> StreamingResponse:
     )
 
 
+def _stream_partial_pdf(
+    db: Session,
+    complaint_id: str,
+    export_kind: str,
+    filename_prefix: str,
+) -> StreamingResponse:
+    from app.services import pdf_service
+
+    _, report = _get_report_by_identifier(complaint_id, db)
+
+    if not report:
+        raise HTTPException(status_code=404, detail="No 8D report found for this complaint")
+
+    try:
+        if export_kind == "d1_d3":
+            file_bytes = pdf_service.generate_report_d1_d3(db, complaint_id)
+        elif export_kind == "d1_d5":
+            file_bytes = pdf_service.generate_report_d1_to_d5(db, complaint_id)
+        else:
+            raise HTTPException(status_code=500, detail=f"Unsupported PDF export kind '{export_kind}'")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"PDF dependencies are not installed: {exc}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"PDF export failed: {exc}")
+
+    filename = f"{filename_prefix}_{report.report_number}.pdf"
+    return StreamingResponse(
+        io.BytesIO(file_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 def _get_report_by_ref(reference_number: str, db: Session):
+    return _get_report_by_identifier(reference_number, db)
+
+
+def _get_report_by_identifier(complaint_identifier: str, db: Session):
     complaint = (
         db.query(Complaint)
-        .filter(Complaint.reference_number == reference_number)
+        .filter(Complaint.reference_number == complaint_identifier)
         .first()
     )
+    if not complaint and complaint_identifier.isdigit():
+        complaint = db.query(Complaint).filter(Complaint.id == int(complaint_identifier)).first()
     if not complaint:
         raise HTTPException(status_code=404, detail="Complaint not found")
 
