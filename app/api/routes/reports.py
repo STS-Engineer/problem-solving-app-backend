@@ -1,6 +1,7 @@
 # app/api/routes/reports.py
 
 import io
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -12,6 +13,7 @@ from app.services.report_export_service import ReportExportService
 from app.schemas.report import *
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/complaint/{reference_number}/export")
@@ -204,8 +206,14 @@ def _stream_partial_pdf(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ImportError as exc:
+        logger.exception("PDF dependencies import failed for complaint '%s'", complaint_id)
         raise HTTPException(status_code=500, detail=f"PDF dependencies are not installed: {exc}")
     except Exception as exc:
+        logger.exception(
+            "PDF export failed for complaint '%s' (kind=%s)",
+            complaint_id,
+            export_kind,
+        )
         raise HTTPException(status_code=500, detail=f"PDF export failed: {exc}")
 
     filename = f"{filename_prefix}_{report.report_number}.pdf"

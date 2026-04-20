@@ -4,7 +4,7 @@ import io
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -94,6 +94,12 @@ class AttachmentRecord:
     content: Optional[bytes]
 
 
+def _pdf_safe_string(value: str) -> str:
+    # ReportLab's built-in fonts are limited; replace unsupported characters
+    # instead of failing the entire export.
+    return value.encode("cp1252", errors="replace").decode("cp1252")
+
+
 def _styles():
     styles = getSampleStyleSheet()
     styles.add(
@@ -174,7 +180,7 @@ def _text(value: Any, default: str = "") -> str:
         return _text(value.value, default)
     if isinstance(value, bool):
         return "Yes" if value else "No"
-    return str(value).strip()
+    return _pdf_safe_string(str(value).strip())
 
 
 def _has_value(value: Any) -> bool:
