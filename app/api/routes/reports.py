@@ -187,14 +187,14 @@ def _stream_partial_pdf(
     export_kind: str,
     filename_prefix: str,
 ) -> StreamingResponse:
-    from app.services import pdf_service
-
     _, report = _get_report_by_identifier(complaint_id, db)
 
     if not report:
         raise HTTPException(status_code=404, detail="No 8D report found for this complaint")
 
     try:
+        from app.services import pdf_service
+
         if export_kind == "d1_d3":
             file_bytes = pdf_service.generate_report_d1_d3(db, complaint_id)
         elif export_kind == "d1_d5":
