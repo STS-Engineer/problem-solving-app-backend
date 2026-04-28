@@ -250,7 +250,15 @@ def _process_step(db: Session, step: ReportStep) -> bool:
     """
     hours = _hours_overdue(step)
     complaint = step.report.complaint
-
+    if getattr(complaint, "status", None) in ["closed", "cancelled"]:
+        logger.debug(
+            "Step %s (%s): complaint %s is %s — skip escalation",
+            step.id,
+            step.step_code,
+            complaint.reference_number,
+            complaint.status,
+        )
+        return False
     logger.debug(
         "Step %s | %s | complaint=%s | due=%s | overdue=%s | escalation_count=%s | qm=%s | pm=%s",
         step.id,
@@ -450,6 +458,16 @@ def _retry_outbox_entry(db: Session, entry: EmailOutbox) -> None:
         return
 
     complaint = step.report.complaint
+    if getattr(complaint, "status", None) in ["closed", "cancelled"]:
+      entry.status = "abandoned"
+      entry.last_error = "Complaint closed/cancelled — escalation no longer valid"
+      logger.info(
+          "Outbox %s abandoned — complaint %s is %s",
+          entry.id,
+          complaint.reference_number,
+          complaint.status,
+      )
+      return
     hours_now = _hours_overdue(step)  # may be None if due_date was pushed out
     hours_for_body = hours_now if hours_now is not None else 0.0
 
