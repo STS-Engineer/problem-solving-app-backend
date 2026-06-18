@@ -43,8 +43,8 @@ from app.core.email import _send_sync as _send_email
 logger = logging.getLogger(__name__)
 
 # ── SLA config ────────────────────────────────────────────────────────────────
-COO_EMAIL = os.getenv("COO_EMAIL", "hayfa.rajhi@avocarbon.com")
-CEO_EMAIL = os.getenv("CEO_EMAIL", "hayfa.rajhi@avocarbon.com")
+COO_EMAIL = os.getenv("COO_EMAIL", "roberto.gonzalez@avocarbon.com")
+CEO_EMAIL = os.getenv("CEO_EMAIL", "olivier.spicker@avocarbon.com")
 
 _RETRY_BACKOFF_MINUTES = [10, 30, 60]  # attempt 1→10min, 2→30min, 3+→60min
 _STUCK_PENDING_THRESHOLD_MINUTES = 45  # must be > scheduler check interval (30min)
