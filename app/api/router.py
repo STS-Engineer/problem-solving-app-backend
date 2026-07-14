@@ -13,6 +13,8 @@ from app.api.routes.audit_priorities import router as priorities_router
 
 from app.api.routes.audit_priorities import router as priorities_router
 from app.api.routes.admin_router import router as admin_router
+from app.api.routes.email_intake import router as email_intake_router
+from app.api.routes.plant_contacts import router as plant_contacts_router
 
 api_router = APIRouter()
 
@@ -33,4 +35,9 @@ api_router.include_router(
 api_router.include_router(debug_router)
 api_router.include_router(priorities_router, prefix="/complaints", tags=["Audit"])
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
-api_router.include_router(priorities_router, prefix="/complaints", tags=["Audit"])
+api_router.include_router(
+    email_intake_router, prefix="/intake", tags=["email-intake"]
+)
+api_router.include_router(
+    plant_contacts_router, prefix="/plant-contacts", tags=["plant-contacts"]
+)

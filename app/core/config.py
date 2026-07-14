@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     OPENAI_MAX_TOKENS: int = 4000
     OPENAI_TEMPERATURE: float = 0.2
 
+    # ── Email intake (complaints received by email) ──────────────────────────
+    # Shared secret the ChatGPT/MCP agent must send as the X-Intake-Key header.
+    # Leave empty to disable the check (NOT recommended in production).
+    INTAKE_API_KEY: str = ""
+    # Recipient used when the plant of an incoming complaint cannot be resolved.
+    INTAKE_FALLBACK_EMAIL: str = (
+        "hayfa.rajhi@avocarbon.com"  # esperanza.deaquino@avocarbon.com"
+    )
+    # Base URL of the frontend, used to build the review link in notifications.
+    INTAKE_REVIEW_BASE_URL: str = (
+        "https://avocarbon-customer-complaint.azurewebsites.net"
+    )
+
 
 settings = Settings()
 
