@@ -80,9 +80,9 @@ class Complaint(Base):
     reported_by = Column(
         Integer,
         ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
         index=True,
-        comment="User who created complaint",
+        comment="Internal user who created the complaint; NULL for email/bot-sourced complaints",
     )
 
     created_at = Column(

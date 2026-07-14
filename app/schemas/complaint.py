@@ -39,8 +39,8 @@ class ComplaintBase(BaseModel):
 
 
 class ComplaintCreate(ComplaintBase):
-    # the authenticated user is the reporter; we still accept it explicitly for now
-    reported_by: int
+    # Optional: set for UI-created complaints, NULL for email/bot-sourced ones
+    reported_by: Optional[int] = None
 
 
 class ComplaintUpdate(BaseModel):
@@ -76,7 +76,7 @@ class ComplaintUpdate(BaseModel):
 
 class ComplaintRead(ComplaintBase):
     id: int
-    reported_by: int
+    reported_by: Optional[int] = None
     created_at: datetime
     updated_at: datetime
     closed_at: Optional[datetime] = None

@@ -32,7 +32,7 @@ class Report(Base):
     summary = Column(Text)
     plant = Column(SQLEnum(PlantEnum, name="plant_enum"), nullable=False, index=True)
     created_by = Column(
-        Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+        Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     reviewed_by = Column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), index=True

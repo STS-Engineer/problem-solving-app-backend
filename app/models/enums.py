@@ -17,7 +17,7 @@ class PlantEnum(str, enum.Enum):
     MONTERREY = "MONTERREY"
     KUNSHAN = "KUNSHAN"
     CHENNAI = "CHENNAI"
-    DAUGU = "DAUGU"
+    DAEGU = "DAEGU"
     TIANJIN = "TIANJIN"
     POITIERS = "POITIERS"
     FRANKFURT = "FRANKFURT"
@@ -26,3 +26,4 @@ class PlantEnum(str, enum.Enum):
     AMIENS = "AMIENS"
     ANHUI = "ANHUI"
     KOREA = "KOREA"
+    NADHOUR = "NADHOUR"
