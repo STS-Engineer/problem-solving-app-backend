@@ -1,11 +1,22 @@
 from __future__ import annotations
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ENV_FILE = PROJECT_ROOT / ".env"
+ENV_DIST_FILE = PROJECT_ROOT / ".env.dist"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(str(ENV_DIST_FILE), str(ENV_FILE)),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
     DATABASE_URL: str
     # OpenAI
     OPENAI_API_KEY: str
@@ -35,9 +46,11 @@ class WebhookSettings(BaseSettings):
     # Leave empty to disable email alerts
     webhook_alert_emails_raw: str = "hayfa.rajhi@avocarbon.com"
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    model_config = SettingsConfigDict(
+        env_file=(str(ENV_DIST_FILE), str(ENV_FILE)),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     @property
     def webhook_alert_emails(self) -> list[str]:
