@@ -157,6 +157,10 @@ def _build_email(
         cqt_email=complaint.cqt_email,
         quality_manager_email=complaint.quality_manager_email,
         plant_manager_email=complaint.plant_manager_email,
+        app_url=os.getenv(
+            "AZURE_FRONTEND_URL",
+            "https://avocarbon-customer-complaint.azurewebsites.net",
+        ),
     )
 
 

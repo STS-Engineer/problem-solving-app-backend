@@ -128,7 +128,7 @@ def build_escalation_email(
     cqt_email: str | None,
     quality_manager_email: str | None,
     plant_manager_email: str | None,
-    app_url: str = "https://app.avocarbon.com",
+    app_url: str = "https://avocarbon-customer-complaint.azurewebsites.net",
 ) -> tuple[str, str]:
     """
     Build the subject line and HTML body for a given escalation level.
@@ -173,8 +173,8 @@ def build_escalation_email(
     # Progress bar
     progress = _progress_bar(step_code)
 
-    # CTA button URL
-    cta_url = f"{app_url}/complaints/{complaint_reference}/logs"
+    # Direct link to this complaint's overdue step (real frontend route)
+    cta_url = f"{app_url.rstrip('/')}/8d/{complaint_reference}/{step_code}"
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -238,7 +238,7 @@ def build_escalation_email(
               <tr>
                 <td>
                   <div style="font-family:monospace;font-size:11px;font-weight:700;color:#7A8FA0;letter-spacing:0.07em;margin-bottom:6px">COMPLAINT REFERENCE</div>
-                  <div style="font-family:monospace;font-size:19px;font-weight:800;color:{_NAVY};letter-spacing:-0.01em">{complaint_reference}</div>
+                  <a href="{cta_url}" target="_blank" style="font-family:monospace;font-size:19px;font-weight:800;color:{_BLUE};letter-spacing:-0.01em;text-decoration:none">{complaint_reference}</a>
                   <div style="font-size:14px;font-weight:600;color:#3D5066;margin-top:4px">{complaint_name}</div>
                   <div style="font-size:12px;color:#7A8FA0;margin-top:2px">Customer: <b style="color:{_NAVY}">{customer}</b></div>
                 </td>
@@ -287,17 +287,11 @@ def build_escalation_email(
             <!-- Divider -->
             <div style="border-top:1px solid #E0E4E9;margin-bottom:24px"></div>
 
-            <!-- CTA Button -->
-            <table cellpadding="0" cellspacing="0" border="0">
-              <tr>
-                <td style="border-radius:8px;background:linear-gradient(135deg,{_ORANGE},{_ORANGE}CC)">
-                  <a href="{cta_url}" target="_blank"
-                    style="display:inline-block;padding:13px 28px;font-family:'Helvetica Neue',Arial,sans-serif;font-size:14px;font-weight:700;color:white;text-decoration:none;border-radius:8px;letter-spacing:0.02em">
-                    Open Complaint Logger &rarr;
-                  </a>
-                </td>
-              </tr>
-            </table>
+            <!-- CTA Button (same reliable style as the intake email) -->
+            <a href="{cta_url}" target="_blank"
+              style="display:inline-block;background:{_ORANGE};color:#ffffff;text-decoration:none;padding:13px 28px;border-radius:8px;font-size:14px;font-weight:700;letter-spacing:0.02em;font-family:'Helvetica Neue',Arial,sans-serif">
+              Open Complaint &rarr;
+            </a>
 
           </td>
         </tr>
