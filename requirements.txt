@@ -17,6 +17,7 @@ Pillow
 openpyxl
 apscheduler
 asyncpg
+azure-storage-blob
 matplotlib
 reportlab
 numpy
