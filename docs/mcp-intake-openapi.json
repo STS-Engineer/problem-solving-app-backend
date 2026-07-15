@@ -1,0 +1,307 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "AVOCarbon Email Intake API",
+    "version": "0.1.0"
+  },
+  "servers": [
+    {
+      "url": "https://complaint-back.azurewebsites.net",
+      "description": "Azure backend"
+    }
+  ],
+  "paths": {
+    "/api/v1/intake/email": {
+      "post": {
+        "tags": ["email-intake"],
+        "summary": "Register a complaint received by email",
+        "description": "Idempotent intake of a complaint email. Dedups on source_message_id and attaches follow-ups on conversation_id. Only source_message_id is required; send everything the email provides.",
+        "operationId": "createComplaintIntake",
+        "security": [{ "IntakeKey": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EmailIntakeCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Intake created (or duplicate / attached_to_existing)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EmailIntakeResult" }
+              }
+            }
+          },
+          "401": { "description": "Invalid or missing X-Intake-Key" },
+          "422": { "description": "Validation error" }
+        }
+      }
+    },
+    "/api/v1/intake": {
+      "get": {
+        "tags": ["email-intake"],
+        "summary": "List email intakes",
+        "description": "List intakes, filtered by status.",
+        "operationId": "listIntakes",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["pending_review", "promoted", "rejected", "duplicate"],
+              "default": "pending_review"
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Intake list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/EmailIntakeListItem" }
+                }
+              }
+            }
+          },
+          "422": { "description": "Validation error" }
+        }
+      }
+    },
+    "/api/v1/complaints": {
+      "get": {
+        "tags": ["complaints"],
+        "summary": "List Complaints",
+        "description": "List complaints with optional filters.",
+        "operationId": "listComplaints",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 0, "default": 0 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "product_line",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["ASSEMBLY", "BRUSH", "CHOKE", "SEAL", "FRICTION"]
+            }
+          },
+          {
+            "name": "cqt_email",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Complaint list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ComplaintListItem" }
+                }
+              }
+            }
+          },
+          "422": { "description": "Validation error" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "IntakeKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Intake-Key"
+      }
+    },
+    "schemas": {
+      "PlantEnum": {
+        "type": "string",
+        "enum": [
+          "MONTERREY",
+          "KUNSHAN",
+          "CHENNAI",
+          "DAEGU",
+          "TIANJIN",
+          "POITIERS",
+          "FRANKFURT",
+          "SCEET",
+          "SAME",
+          "AMIENS",
+          "ANHUI",
+          "KOREA",
+          "NADHOUR"
+        ]
+      },
+      "AttachmentIn": {
+        "type": "object",
+        "required": ["filename"],
+        "properties": {
+          "filename": { "type": "string" },
+          "url": { "type": "string", "nullable": true },
+          "mime_type": { "type": "string", "nullable": true }
+        }
+      },
+      "EmailIntakeCreate": {
+        "type": "object",
+        "required": ["source_message_id"],
+        "properties": {
+          "source_message_id": {
+            "type": "string",
+            "maxLength": 998,
+            "description": "RFC 5322 Message-ID of the email — the dedup key. ALWAYS send this."
+          },
+          "conversation_id": {
+            "type": "string",
+            "maxLength": 512,
+            "nullable": true,
+            "description": "Mail thread id — follow-ups attach to the same complaint."
+          },
+          "sender_email": {
+            "type": "string",
+            "maxLength": 255,
+            "nullable": true,
+            "description": "The email envelope From address (who sent the claim)."
+          },
+          "sender_name": { "type": "string", "maxLength": 255, "nullable": true },
+          "subject": { "type": "string", "maxLength": 998, "nullable": true },
+          "received_at": { "type": "string", "format": "date-time", "nullable": true },
+          "raw_body": {
+            "type": "string",
+            "nullable": true,
+            "description": "Plain-text body of the email."
+          },
+          "raw_html": { "type": "string", "nullable": true },
+          "attachments": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/AttachmentIn" }
+          },
+          "extracted_data": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "AI-extracted complaint fields (all optional): complaint_name, customer, customer_plant_name, avocarbon_plant, avocarbon_product_type, product_line, quality_issue_warranty, defects, complaint_description, customer_complaint_date, etc."
+          },
+          "ai_notes": {
+            "type": "string",
+            "nullable": true,
+            "description": "Notes on what could not be determined."
+          },
+          "missing_fields": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Names of required fields the email did not provide."
+          },
+          "detected_plant": {
+            "allOf": [{ "$ref": "#/components/schemas/PlantEnum" }],
+            "nullable": true,
+            "description": "Set only if confidently identified; otherwise omit and it falls back to triage."
+          }
+        }
+      },
+      "EmailIntakeResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["created", "duplicate", "attached_to_existing"]
+          },
+          "intake_id": { "type": "integer" },
+          "notified_to": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "EmailIntakeListItem": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "source_message_id": { "type": "string" },
+          "sender_email": { "type": "string", "nullable": true },
+          "sender_name": { "type": "string", "nullable": true },
+          "subject": { "type": "string", "nullable": true },
+          "detected_plant": { "type": "string", "nullable": true },
+          "status": { "type": "string" },
+          "missing_fields": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "assigned_cqe_email": { "type": "string", "nullable": true },
+          "complaint_id": { "type": "integer", "nullable": true },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ComplaintListItem": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "reference_number": { "type": "string" },
+          "complaint_name": { "type": "string" },
+          "customer": { "type": "string", "nullable": true },
+          "customer_plant_name": { "type": "string", "nullable": true },
+          "avocarbon_product_type": { "type": "string", "nullable": true },
+          "concerned_application": { "type": "string", "nullable": true },
+          "product_line": { "type": "string" },
+          "avocarbon_plant": { "type": "string", "nullable": true },
+          "status": { "type": "string" },
+          "quality_issue_warranty": { "type": "string", "nullable": true },
+          "defects": { "type": "string", "nullable": true },
+          "customer_complaint_date": { "type": "string", "format": "date", "nullable": true },
+          "complaint_opening_date": { "type": "string", "format": "date", "nullable": true },
+          "repetitive_complete_with_number": { "type": "string", "nullable": true },
+          "complaint_description": { "type": "string", "nullable": true },
+          "potential_avocarbon_process_linked_to_problem": { "type": "string", "nullable": true },
+          "closed_at": { "type": "string", "format": "date-time", "nullable": true },
+          "current_step_code": { "type": "string", "nullable": true },
+          "all_completed": { "type": "boolean" },
+          "has_report": { "type": "boolean" },
+          "has_export_report": { "type": "boolean" },
+          "is_overdue": { "type": "boolean", "nullable": true },
+          "cqt_email": { "type": "string", "nullable": true },
+          "quality_manager_email": { "type": "string", "nullable": true },
+          "plant_manager_email": { "type": "string", "nullable": true },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}
+ 

@@ -68,6 +68,15 @@ class EmailIntakeResult(BaseModel):
     notified_to: List[str] = Field(default_factory=list)
 
 
+class EmailIntakePromoteResult(BaseModel):
+    """Result of promoting an intake to a real complaint."""
+
+    status: str  # created | already_promoted | incomplete
+    complaint_id: Optional[int] = None
+    reference_number: Optional[str] = None
+    missing_fields: List[str] = Field(default_factory=list)
+
+
 class EmailIntakeRead(BaseModel):
     id: int
     source_message_id: str

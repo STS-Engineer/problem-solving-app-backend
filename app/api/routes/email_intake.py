@@ -17,10 +17,12 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.core.config import settings
 from app.models.email_intake import EmailIntake
+from app.schemas.complaint import ComplaintCreate
 from app.schemas.email_intake import (
     EmailIntakeAssign,
     EmailIntakeCreate,
     EmailIntakeListItem,
+    EmailIntakePromoteResult,
     EmailIntakeRead,
     EmailIntakeResult,
     EmailIntakeSetPlant,
@@ -103,6 +105,38 @@ def set_plant(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return intake
+
+
+@router.post(
+    "/{intake_id}/promote",
+    response_model=EmailIntakePromoteResult,
+    summary="Promote an intake to a complaint if complete (idempotent)",
+)
+def promote_intake(
+    intake_id: int, db: Session = Depends(get_db)
+) -> EmailIntakePromoteResult:
+    try:
+        result = EmailIntakeService.promote(db, intake_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return EmailIntakePromoteResult(**result)
+
+
+@router.post(
+    "/{intake_id}/complete",
+    response_model=EmailIntakePromoteResult,
+    summary="Path A: CQT submits the completion form → create the complaint",
+)
+def complete_intake(
+    intake_id: int,
+    payload: ComplaintCreate,
+    db: Session = Depends(get_db),
+) -> EmailIntakePromoteResult:
+    try:
+        result = EmailIntakeService.complete(db, intake_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return EmailIntakePromoteResult(**result)
 
 
 @router.post(
