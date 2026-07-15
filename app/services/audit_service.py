@@ -295,6 +295,47 @@ async def log_escalation_sent(
     )
 
 
+async def log_escalation_action(
+    db: AsyncSession,
+    complaint_id: int,
+    step_id: int | None,
+    step_code: str | None,
+    *,
+    level: int,
+    action_type: str,
+    performed_by_email: str,
+    note: str | None = None,
+    resolved: bool = False,
+    attachment_url: str | None = None,
+    attachment_name: str | None = None,
+    attachment_blob_name: str | None = None,
+) -> ComplaintAuditLog:
+    """
+    Record what an L1/L2 responder did in response to an escalation
+    (called the responsible, reassigned, approved a purchase, …).
+
+    Unlike `escalation_sent` (a system event), this is a human action, so
+    `performed_by_email` is always set.
+    """
+    return await log_event(
+        db,
+        complaint_id=complaint_id,
+        step_id=step_id,
+        step_code=step_code,
+        event_type="escalation_action",
+        event_data={
+            "level": level,
+            "action_type": action_type,
+            "note": note,
+            "resolved": resolved,
+            "attachment_url": attachment_url,
+            "attachment_name": attachment_name,
+            "attachment_blob_name": attachment_blob_name,
+        },
+        performed_by_email=performed_by_email,
+    )
+
+
 async def log_status_changed(
     db: AsyncSession,
     complaint_id: int,

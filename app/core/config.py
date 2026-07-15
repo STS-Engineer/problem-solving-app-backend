@@ -37,6 +37,12 @@ class Settings(BaseSettings):
         "https://avocarbon-customer-complaint.azurewebsites.net"
     )
 
+    # ── Azure Blob Storage (escalation-action attachments) ───────────────────
+    # Set both in .env to enable file uploads. Leave empty to disable the
+    # feature (the upload endpoint returns 503 until configured).
+    AZURE_CONNECTION_STRING: str = ""
+    AZURE_STORAGE_CONTAINER_NAME: str = ""
+
 
 settings = Settings()
 

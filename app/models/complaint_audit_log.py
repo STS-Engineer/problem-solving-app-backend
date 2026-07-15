@@ -51,7 +51,8 @@ class ComplaintAuditLog(Base):
         comment=(
             "complaint_created|report_created|step_filled|"
             "step_updated|step_reopened|due_date_missed|"
-            "escalation_sent|status_changed|comment_added|file_uploaded"
+            "escalation_sent|escalation_action|status_changed|"
+            "comment_added|file_uploaded"
         ),
     )
 

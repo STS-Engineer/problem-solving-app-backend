@@ -1,10 +1,20 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+import logging
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    Query,
+    HTTPException,
+    UploadFile,
+    File,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
+from app.services import blob_storage
 from app.api.deps import get_async_db
 from app.models.complaint import Complaint
 from app.models.complaint_audit_log import ComplaintAuditLog
@@ -18,7 +28,13 @@ from app.schemas.complaint_logger import (
     ComplaintLogsResponse,
     StepLogsResponse,
     StepWithLogs,
+    EscalationActionRequest,
+    EscalationLevelTrack,
+    EscalationTrackResponse,
 )
+from app.services.audit_service import log_escalation_action
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -296,3 +312,218 @@ async def get_complaint_step_logs(
         steps=step_items,
         complaint_level_logs=[_serialize_log(lg) for lg in complaint_level_logs],
     )
+
+
+# ─── POST /{complaint_id}/escalation-action ───────────────────────────────────
+
+
+@router.post("/{complaint_id}/escalation-action", response_model=AuditLogEntry)
+async def record_escalation_action(
+    complaint_id: int,
+    payload: EscalationActionRequest,
+    db: AsyncSession = Depends(get_async_db),
+) -> AuditLogEntry:
+    """
+    Record what an L1/L2 responder did in response to an escalation email:
+    called the responsible, reassigned the complaint, approved a purchase, etc.
+
+    Stored as an `escalation_action` audit event so it shows up in the timeline
+    and the escalation track alongside the `escalation_sent` event it answers.
+    """
+    c_result = await db.execute(
+        select(Complaint)
+        .where(Complaint.id == complaint_id)
+        .options(selectinload(Complaint.report).selectinload(Report.steps))
+    )
+    complaint = c_result.scalar_one_or_none()
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    steps = complaint.report.steps if complaint.report else []
+    step = next((s for s in steps if s.step_code == payload.step_code), None)
+    if step is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Step {payload.step_code} not found on this complaint",
+        )
+
+    entry = await log_escalation_action(
+        db,
+        complaint_id=complaint_id,
+        step_id=step.id,
+        step_code=step.step_code,
+        level=payload.level,
+        action_type=payload.action_type.value,
+        performed_by_email=payload.performed_by_email,
+        note=payload.note,
+        resolved=payload.resolved,
+        attachment_url=payload.attachment_url,
+        attachment_name=payload.attachment_name,
+        attachment_blob_name=payload.attachment_blob_name,
+    )
+    await db.commit()
+    await db.refresh(entry)
+    return _serialize_log(entry)
+
+
+# ─── GET /{complaint_id}/escalation-track ─────────────────────────────────────
+
+
+@router.get("/{complaint_id}/escalation-track", response_model=EscalationTrackResponse)
+async def get_escalation_track(
+    complaint_id: int,
+    db: AsyncSession = Depends(get_async_db),
+) -> EscalationTrackResponse:
+    """
+    Consolidated escalation track for the Owner and L2: one entry per
+    (step, level) that was escalated, pairing the sent notification with the
+    responder actions recorded against it.
+    """
+    c_result = await db.execute(
+        select(Complaint)
+        .where(Complaint.id == complaint_id)
+        .options(selectinload(Complaint.audit_logs))
+    )
+    complaint = c_result.scalar_one_or_none()
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    # Group sent + action events by (step_code, level).
+    # groups[(step_code, level)] = {"sent": log|None, "actions": [log, ...]}
+    groups: dict[tuple[str | None, int], dict] = {}
+
+    def _bucket(step_code: str | None, level: int) -> dict:
+        return groups.setdefault(
+            (step_code, level), {"sent": None, "actions": []}
+        )
+
+    for log in complaint.audit_logs:
+        level = (log.event_data or {}).get("level")
+        if not isinstance(level, int):
+            continue
+        if log.event_type == "escalation_sent":
+            b = _bucket(log.step_code, level)
+            # keep the earliest sent event for this level
+            if b["sent"] is None or log.created_at < b["sent"].created_at:
+                b["sent"] = log
+        elif log.event_type == "escalation_action":
+            _bucket(log.step_code, level)["actions"].append(log)
+
+    levels: list[EscalationLevelTrack] = []
+    for (step_code, level) in sorted(groups, key=lambda k: (k[0] or "", k[1])):
+        b = groups[(step_code, level)]
+        sent_log = b["sent"]
+        actions = sorted(b["actions"], key=lambda lg: lg.created_at)
+        resolved = any((a.event_data or {}).get("resolved") for a in actions)
+        levels.append(
+            EscalationLevelTrack(
+                level=level,
+                step_code=step_code or "",
+                sent_at=sent_log.created_at if sent_log else None,
+                recipients=(
+                    (sent_log.event_data or {}).get("recipients", [])
+                    if sent_log
+                    else []
+                ),
+                actions=[_serialize_log(a) for a in actions],
+                resolved=resolved,
+            )
+        )
+
+    return EscalationTrackResponse(
+        complaint_id=complaint_id,
+        reference_number=complaint.reference_number,
+        complaint_name=complaint.complaint_name,
+        levels=levels,
+    )
+
+
+# ─── Escalation-action attachments (Azure Blob Storage) ───────────────────────
+#
+# Files are uploaded to Azure Blob Storage via app.services.blob_storage.
+# The upload returns a long-lived SAS URL (stored on the action as
+# attachment_url) plus the blob_name (stored as attachment_blob_name so the
+# file can be deleted together with the action). No extra DB table is needed.
+
+
+@router.post("/{complaint_id}/escalation-action/attachment")
+async def upload_escalation_attachment(
+    complaint_id: int,
+    step_code: str = Query(..., description="D1–D8 the attachment belongs to"),
+    level: int = Query(1, ge=1, le=4),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    """
+    Upload an attachment (signed PO, screenshot, email export…) for an
+    escalation action. Returns {url, blob_name, filename, mime_type} — the
+    caller submits url/filename/blob_name on the action itself.
+    """
+    exists = await db.execute(
+        select(Complaint.id).where(Complaint.id == complaint_id)
+    )
+    if exists.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    result = await blob_storage.upload_escalation_attachment(
+        file=file,
+        complaint_id=complaint_id,
+        step_code=step_code,
+        level=level,
+    )
+    return {
+        "url": result["file_url"],
+        "blob_name": result["blob_name"],
+        "filename": result["filename"],
+        "mime_type": result["mimetype"],
+    }
+
+
+@router.delete("/{complaint_id}/escalation-action/attachment")
+async def delete_escalation_attachment(
+    complaint_id: int,
+    blob_name: str = Query(..., description="Blob path returned by the upload"),
+) -> dict:
+    """
+    Delete an uploaded attachment blob. Used to clean up an orphan file when the
+    responder removes it before saving the action.
+    """
+    deleted = await blob_storage.delete_blob(blob_name)
+    return {"deleted": deleted, "blob_name": blob_name}
+
+
+@router.delete("/{complaint_id}/escalation-action/{log_id}")
+async def delete_escalation_action(
+    complaint_id: int,
+    log_id: int,
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    """
+    Delete a recorded escalation action. If the action had an uploaded
+    attachment, the blob is removed too (best-effort).
+    """
+    result = await db.execute(
+        select(ComplaintAuditLog).where(
+            ComplaintAuditLog.id == log_id,
+            ComplaintAuditLog.complaint_id == complaint_id,
+            ComplaintAuditLog.event_type == "escalation_action",
+        )
+    )
+    log = result.scalar_one_or_none()
+    if log is None:
+        raise HTTPException(status_code=404, detail="Escalation action not found")
+
+    blob_name = (log.event_data or {}).get("attachment_blob_name")
+    if blob_name and blob_storage.is_configured():
+        try:
+            await blob_storage.delete_blob(blob_name)
+        except Exception:
+            logger.warning(
+                "Could not delete blob %s for action %s — deleting action anyway",
+                blob_name,
+                log_id,
+            )
+
+    await db.delete(log)
+    await db.commit()
+    return {"deleted": True, "log_id": log_id}

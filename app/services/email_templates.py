@@ -174,7 +174,10 @@ def build_escalation_email(
     progress = _progress_bar(step_code)
 
     # Direct link to this complaint's overdue step (real frontend route)
-    cta_url = f"{app_url.rstrip('/')}/8d/{complaint_reference}/{step_code}"
+    base = app_url.rstrip("/")
+    cta_url = f"{base}/8d/{complaint_reference}/{step_code}"
+    # Link to the logger, deep-linked to record the escalation action for this step
+    logger_url = f"{base}/logger?ref={complaint_reference}&action={step_code}"
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -287,11 +290,27 @@ def build_escalation_email(
             <!-- Divider -->
             <div style="border-top:1px solid #E0E4E9;margin-bottom:24px"></div>
 
-            <!-- CTA Button (same reliable style as the intake email) -->
-            <a href="{cta_url}" target="_blank"
-              style="display:inline-block;background:{_ORANGE};color:#ffffff;text-decoration:none;padding:13px 28px;border-radius:8px;font-size:14px;font-weight:700;letter-spacing:0.02em;font-family:'Helvetica Neue',Arial,sans-serif">
-              Open Complaint &rarr;
-            </a>
+            <!-- CTA Buttons -->
+            <table cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="padding-right:10px">
+                  <a href="{cta_url}" target="_blank"
+                    style="display:inline-block;background:{_ORANGE};color:#ffffff;text-decoration:none;padding:13px 24px;border-radius:8px;font-size:14px;font-weight:700;letter-spacing:0.02em;font-family:'Helvetica Neue',Arial,sans-serif">
+                    Open Complaint &rarr;
+                  </a>
+                </td>
+                <td>
+                  <a href="{logger_url}" target="_blank"
+                    style="display:inline-block;background:#ffffff;color:{_NAVY};text-decoration:none;padding:12px 24px;border:1.5px solid {_NAVY};border-radius:8px;font-size:14px;font-weight:700;letter-spacing:0.02em;font-family:'Helvetica Neue',Arial,sans-serif">
+                    Record Actions Taken
+                  </a>
+                </td>
+              </tr>
+            </table>
+            <div style="font-size:11px;color:#7A8FA0;margin-top:10px;line-height:1.5">
+              Use <b style="color:{_NAVY}">Record Actions Taken</b> to log what you did in response to this escalation
+              (called the responsible, reassigned, approved a purchase&hellip;) so it appears in the escalation track.
+            </div>
 
           </td>
         </tr>
