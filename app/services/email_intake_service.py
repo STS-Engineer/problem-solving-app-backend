@@ -453,7 +453,9 @@ class EmailIntakeService:
             )
             or "0",
             cqt_email=intake.assigned_cqe_email,
-            quality_manager_email=(contact.quality_manager_email if contact else None),
+            quality_manager_emails=(
+                list(contact.quality_manager_emails or []) if contact else []
+            ),
             plant_manager_email=(contact.plant_manager_email if contact else None),
             reported_by=None,
         )
@@ -536,8 +538,10 @@ class EmailIntakeService:
                 .one_or_none()
             )
             if contact:
-                if not payload.quality_manager_email and contact.quality_manager_email:
-                    updates["quality_manager_email"] = contact.quality_manager_email
+                if not payload.quality_manager_emails and contact.quality_manager_emails:
+                    updates["quality_manager_emails"] = list(
+                        contact.quality_manager_emails
+                    )
                 if not payload.plant_manager_email and contact.plant_manager_email:
                     updates["plant_manager_email"] = contact.plant_manager_email
 

@@ -110,7 +110,7 @@ def _level_to_send(hours: float, already_sent: int) -> int | None:
 def _build_recipients(level: int, complaint: Complaint) -> list[str]:
     match level:
         case 1:
-            return [e for e in [complaint.quality_manager_email] if e]
+            return [e for e in (complaint.quality_manager_emails or []) if e]
         case 2:
             return [e for e in [complaint.plant_manager_email] if e]
         case 3:
@@ -126,10 +126,10 @@ def _build_cc(level: int, complaint: Complaint) -> list[str] | None:
         case 3:
             cc = [
                 e
-                for e in [
-                    complaint.plant_manager_email,
-                    complaint.quality_manager_email,
-                ]
+                for e in (
+                    [complaint.plant_manager_email]
+                    + list(complaint.quality_manager_emails or [])
+                )
                 if e
             ]
             return cc or None
@@ -155,7 +155,7 @@ def _build_email(
         hours_overdue=hours,
         due_date=step.due_date.isoformat() if step.due_date else "",
         cqt_email=complaint.cqt_email,
-        quality_manager_email=complaint.quality_manager_email,
+        quality_manager_emails=complaint.quality_manager_emails,
         plant_manager_email=complaint.plant_manager_email,
         app_url=os.getenv(
             "AZURE_FRONTEND_URL",

@@ -67,7 +67,7 @@ class ComplaintLogItem(BaseModel):
     status: str
     priority: str
     cqt_email: str | None
-    quality_manager_email: str | None
+    quality_manager_emails: list[str] = Field(default_factory=list)
     plant_manager_email: str | None
     created_at: datetime
     due_date: datetime | None
@@ -109,7 +109,7 @@ class StepLogsResponse(BaseModel):
     complaint_name: str
     customer: str
     cqt_email: str | None
-    quality_manager_email: str | None
+    quality_manager_emails: list[str] = Field(default_factory=list)
     plant_manager_email: str | None
     status: str
     priority: str

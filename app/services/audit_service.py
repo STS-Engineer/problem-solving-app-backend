@@ -137,7 +137,7 @@ async def log_complaint_created(
     *,
     priority: str,
     cqt_email: str | None,
-    quality_manager_email: str | None,
+    quality_manager_emails: list[str] | None,
     performed_by_email: str,
 ) -> ComplaintAuditLog:
     return await log_event(
@@ -147,7 +147,7 @@ async def log_complaint_created(
         event_data={
             "priority": priority,
             "cqt_email": cqt_email,
-            "quality_manager_email": quality_manager_email,
+            "quality_manager_emails": quality_manager_emails or [],
         },
         performed_by_email=performed_by_email,
     )
@@ -418,7 +418,7 @@ def log_complaint_created_sync(
     *,
     priority: str,
     cqt_email: str | None,
-    quality_manager_email: str | None,
+    quality_manager_emails: list[str] | None,
     performed_by_email: str,
 ) -> ComplaintAuditLog:
     return log_event_sync(
@@ -428,7 +428,7 @@ def log_complaint_created_sync(
         event_data={
             "priority": priority,
             "cqt_email": cqt_email,
-            "quality_manager_email": quality_manager_email,
+            "quality_manager_emails": quality_manager_emails or [],
         },
         performed_by_email=performed_by_email,
     )

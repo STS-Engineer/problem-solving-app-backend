@@ -89,7 +89,7 @@ def _complaint_dict(complaint: Complaint) -> dict[str, Any]:
         ),
         "due_date": (complaint.due_date.isoformat() if complaint.due_date else None),
         "cqt_email": complaint.cqt_email,
-        "quality_manager_email": complaint.quality_manager_email,
+        "quality_manager_emails": complaint.quality_manager_emails,
         "created_at": (
             complaint.created_at.isoformat() if complaint.created_at else None
         ),

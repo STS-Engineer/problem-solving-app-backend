@@ -29,7 +29,7 @@ class ComplaintBase(BaseModel):
     repetitive_complete_with_number: Optional[str] = None
 
     cqt_email: Optional[str] = None
-    quality_manager_email: Optional[str] = None
+    quality_manager_emails: Optional[List[str]] = None
     plant_manager_email: Optional[str] = None
     approved_by_email: Optional[str] = None
     status: Optional[str] = Field("open", max_length=50)
@@ -115,7 +115,7 @@ class ComplaintListItem(BaseModel):
     all_completed: bool = False
     has_report: bool = False
     cqt_email: Optional[str]
-    quality_manager_email: Optional[str]
+    quality_manager_emails: Optional[List[str]] = None
     plant_manager_email: Optional[str]
     is_overdue:Optional[bool]
 

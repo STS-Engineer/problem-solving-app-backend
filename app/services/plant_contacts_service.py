@@ -46,19 +46,23 @@ class PlantContactService:
             db.add(contact)
 
         data = payload.model_dump(exclude_unset=True)
-        if "cqe_emails" in data and data["cqe_emails"] is not None:
+
+        def _clean_list(raw: list[str]) -> list[str]:
             # normalise: strip, drop blanks, de-dup (case-insensitive)
             seen: set[str] = set()
             cleaned: list[str] = []
-            for e in data["cqe_emails"]:
+            for e in raw:
                 e = (e or "").strip()
                 if e and e.lower() not in seen:
                     seen.add(e.lower())
                     cleaned.append(e)
-            contact.cqe_emails = cleaned
+            return cleaned
+
+        for list_field in ("cqe_emails", "quality_manager_emails"):
+            if list_field in data and data[list_field] is not None:
+                setattr(contact, list_field, _clean_list(data[list_field]))
 
         for field in (
-            "quality_manager_email",
             "plant_manager_email",
             "general_manager_email",
         ):

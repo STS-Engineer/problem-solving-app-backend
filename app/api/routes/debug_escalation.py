@@ -75,7 +75,7 @@ def debug_status(db: Session = Depends(get_db)):
                 "next_level_to_send": level,
                 "recipients": recipients,
                 "complaint_ref": complaint.reference_number,
-                "quality_manager_email": complaint.quality_manager_email,
+                "quality_manager_emails": complaint.quality_manager_emails,
                 "plant_manager_email": complaint.plant_manager_email,
             }
         )

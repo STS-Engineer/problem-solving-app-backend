@@ -32,7 +32,10 @@ class PlantContact(Base):
     # List of CQE (== CQT) emails — a plant can have several.
     cqe_emails = Column(JSON, nullable=False, default=list, comment="List[str] of CQE/CQT emails")
 
-    quality_manager_email = Column(String(255), nullable=True)
+    # A plant can have several Quality Managers — all of them are notified.
+    quality_manager_emails = Column(
+        JSON, nullable=False, default=list, comment="List[str] of Quality Manager emails"
+    )
     plant_manager_email = Column(String(255), nullable=True)
     general_manager_email = Column(String(255), nullable=True)
 
@@ -57,13 +60,13 @@ class PlantContact(Base):
 
     def manager_recipients(self) -> list[str]:
         """
-        QM + PM (+ GM) for this plant — the managers who triage and assign a CQT.
-        Used for the initial "new intake" notification. CQE(s) are NOT included
-        here; the CQT is notified separately once the QM assigns them.
+        QM(s) + PM (+ GM) for this plant — the managers who triage and assign a
+        CQT. Used for the initial "new intake" notification. CQE(s) are NOT
+        included here; the CQT is notified separately once the QM assigns them.
         """
         return self._dedup(
-            [
-                self.quality_manager_email,
+            list(self.quality_manager_emails or [])
+            + [
                 self.plant_manager_email,
                 self.general_manager_email,
             ]
@@ -73,8 +76,8 @@ class PlantContact(Base):
         """Flatten every configured contact (CQE + QM + PM + GM) into a list."""
         return self._dedup(
             list(self.cqe_emails or [])
+            + list(self.quality_manager_emails or [])
             + [
-                self.quality_manager_email,
                 self.plant_manager_email,
                 self.general_manager_email,
             ]

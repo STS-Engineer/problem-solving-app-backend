@@ -126,7 +126,7 @@ def build_escalation_email(
     hours_overdue: float,
     due_date: str,  # ISO string
     cqt_email: str | None,
-    quality_manager_email: str | None,
+    quality_manager_emails: list[str] | None,
     plant_manager_email: str | None,
     app_url: str = "https://avocarbon-customer-complaint.azurewebsites.net",
 ) -> tuple[str, str]:
@@ -154,10 +154,13 @@ def build_escalation_email(
         f"by {overdue} — {cfg['label'].split('—')[0].strip()} (L{level})"
     )
 
-    # Recipients table rows
+    # Recipients table rows. A plant can have several Quality Managers, so
+    # render one row per QM email.
     contacts_rows = ""
+    qm_label = "Quality Manager"
     role_map = [
-        ("Quality Manager", quality_manager_email),
+        (qm_label, qm) for qm in (quality_manager_emails or [])
+    ] + [
         ("CQT (Customer Quality Technician)", cqt_email),
         ("Plant Manager", plant_manager_email),
     ]

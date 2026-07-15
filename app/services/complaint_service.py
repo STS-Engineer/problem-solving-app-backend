@@ -12,6 +12,7 @@ from app.models.complaint import Complaint
 from app.models.complaint_audit_log import ComplaintAuditLog
 from app.models.report import Report
 from app.models.report_step import ReportStep
+from app.models.plant_contacts import PlantContact
 from app.schemas.complaint import ComplaintCreate, ComplaintUpdate
 
 # from app.services import webhook_service
@@ -71,6 +72,42 @@ _STEP_PRIORITY = case(
 class ComplaintService:
 
     @staticmethod
+    def _resolve_plant_managers(db: Session, complaint: Complaint) -> None:
+        """
+        Auto-fill QM / PM emails from the plant_contacts table based on the
+        complaint's avocarbon_plant. Values explicitly provided on the payload
+        win; we only fill in what's missing.
+
+        A plant can have several Quality Managers — all of them are snapshotted
+        onto the complaint so every QM is notified.
+
+        Later this will be backed by external per-plant endpoints; for now the
+        plant_contacts table is the source of truth.
+        """
+        if not complaint.avocarbon_plant:
+            return
+        if complaint.quality_manager_emails and complaint.plant_manager_email:
+            return
+
+        contact = (
+            db.query(PlantContact)
+            .filter(PlantContact.plant == complaint.avocarbon_plant)
+            .one_or_none()
+        )
+        if contact is None:
+            logger.warning(
+                "create_complaint: no plant_contacts row for plant %s — "
+                "QM/PM left empty",
+                complaint.avocarbon_plant,
+            )
+            return
+
+        if not complaint.quality_manager_emails:
+            complaint.quality_manager_emails = list(contact.quality_manager_emails or [])
+        if not complaint.plant_manager_email:
+            complaint.plant_manager_email = contact.plant_manager_email
+
+    @staticmethod
     def create_complaint(
         db: Session,
         payload: ComplaintCreate,
@@ -80,6 +117,9 @@ class ComplaintService:
         complaint.reference_number = generate_complaint_number()
         complaint.priority = PRIORITY_MAPPING.get(payload.quality_issue_warranty, "low")
         complaint.status = "open"  # explicit — never a step code
+
+        # Auto-resolve QM / PM from the plant instead of manual entry.
+        ComplaintService._resolve_plant_managers(db, complaint)
         created_at = datetime.now(timezone.utc)
         if not complaint.due_date:
             complaint.due_date = created_at + timedelta(days=30)
@@ -373,7 +413,7 @@ class ComplaintService:
 ) -> Complaint:
         """
         Cancel a complaint after verifying the caller's CQT email.
-        Sends notification emails to cqt_email and quality_manager_email.
+        Sends notification emails to cqt_email and the quality manager(s).
         """
         result =db.execute(
             select(Complaint).where(Complaint.reference_number == reference_number)
@@ -407,8 +447,7 @@ class ComplaintService:
         db.commit()
         db.refresh(complaint)
         recipients_notified = [complaint.cqt_email]
-        if complaint.quality_manager_email:
-            recipients_notified.append(complaint.quality_manager_email)
+        recipients_notified.extend(complaint.quality_manager_emails or [])
 
         audit = ComplaintAuditLog(
             complaint_id=complaint.id,
@@ -475,9 +514,7 @@ class ComplaintService:
         """
 
         recipients: list[str] = [complaint.cqt_email]
-        cc: list[str] = []
-        if complaint.quality_manager_email:
-            cc.append(complaint.quality_manager_email)
+        cc: list[str] = list(complaint.quality_manager_emails or [])
 
         try:
             _send_sync(subject=subject, recipients=recipients, body_html=body_html, cc=cc)

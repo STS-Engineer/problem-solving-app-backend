@@ -67,6 +67,14 @@ def _configure_logging() -> None:
 _configure_logging()
 logger = logging.getLogger(__name__)
 
+# ── Background jobs toggle ──────────────────────────────────────────────────────
+# Controls whether the APScheduler background jobs (escalation checks, email
+# retries, webhook delivery, nightly prune) run in this process.
+# Defaults to TRUE so the deployed Azure instance keeps running with no config
+# change. Set ENABLE_SCHEDULER=false in your local .env so running the API
+# locally against the shared DB does NOT fire escalation emails or mutate data.
+ENABLE_SCHEDULER = os.getenv("ENABLE_SCHEDULER", "true").lower() == "true"
+
 # ── CORS ──────────────────────────────────────────────────────────────────────
 _AZURE_URL = os.getenv(
     "AZURE_FRONTEND_URL",
@@ -95,7 +103,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.critical("Cannot connect to database at startup: %s", exc)
         raise
 
-    start_scheduler()
+    if not ENABLE_SCHEDULER:
+        logger.warning(
+            "ENABLE_SCHEDULER=false — background jobs (escalation, email retry, "
+            "webhook delivery, prune) are DISABLED in this process. "
+            "This should only be the case for local development."
+        )
+        yield
+        await async_engine.dispose()
+        logger.info("AVOCarbon API stopped.")
+        return
+
+    # start_scheduler()
     cfg = get_webhook_settings()
 
     scheduler = BackgroundScheduler(

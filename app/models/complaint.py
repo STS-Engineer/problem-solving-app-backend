@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Date,
     ForeignKey,
+    JSON,
     Enum as SQLEnum,
 )
 from sqlalchemy.orm import relationship
@@ -108,11 +109,10 @@ class Complaint(Base):
         index=True,
         comment="Customer Quality Technician email (external or internal)",
     )
-    quality_manager_email = Column(
-        String(255),
+    quality_manager_emails = Column(
+        JSON,
         nullable=True,
-        index=True,
-        comment="AVOCarbon quality manager email",
+        comment="List[str] of AVOCarbon quality manager emails (snapshot of the plant's QMs at creation)",
     )
     plant_manager_email = Column(
         String(255),
