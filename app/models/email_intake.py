@@ -36,7 +36,7 @@ class EmailIntake(Base):
         nullable=False,
         unique=True,
         index=True,
-        comment="RFC 5322 Message-ID — idempotency key, prevents duplicates",
+        comment="Stable unique email id — RFC 5322 Message-ID if available, else the Outlook/Graph message id. Idempotency key.",
     )
     conversation_id = Column(
         String(512),

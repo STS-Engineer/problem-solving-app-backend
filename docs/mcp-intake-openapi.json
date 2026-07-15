@@ -171,6 +171,75 @@
           "NADHOUR"
         ]
       },
+      "ExtractedData": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Complaint fields the agent extracts from the email/attachments. None are strictly required by the API (lenient staging), but ALL of the following are needed for the backend to auto-create the complaint without human help: complaint_name, customer, customer_plant_name, avocarbon_plant, avocarbon_product_type, product_line, quality_issue_warranty, potential_avocarbon_process_linked_to_problem, defects, complaint_description, customer_complaint_date. Controlled fields MUST use one of the listed values (case-insensitive) or they count as missing.",
+        "properties": {
+          "complaint_name": {
+            "type": "string",
+            "description": "Short title of the problem, e.g. 'Crack after welding'."
+          },
+          "complaint_description": {
+            "type": "string",
+            "description": "Full description: what was observed, when, on which part, quantity, customer impact."
+          },
+          "customer": {
+            "type": "string",
+            "description": "Customer name. Prefer an exact match from: VALEO, INTEVA, DENSO, KELI, NIDEC, MAHLE, HELLA, HAYWARD, ADVIK, DOLZ, BOSCH, E-MOTOR, BMW, VW, PHINIA, BOSCH POWERTOOL, STANLEY - BLACK AND DECKER, RUIDONG, BYD, KOSTAL, RENAULT, MIMZHEN, BORGWANER, TESLA, US MOTOR WORKS, AUDI, SPECK, PIERBURG, BUEHLER, CEBI, YAMAHA, ELEKTRA, RÖMER, EUROTEC, Tianjin Yixin, Tiang Long, Rui Wei, Li Shui Qiangrun, Ji Ou, Lang Xin, Jiang Su Yun Tai, Kinetic, Zhuo Ren, Dong Jiang, Wu Zhou Ren Xin, Guangzhou Hua Wang, Xuan Pu, Fine-World. If not in the list, send the raw name anyway (a human will complete it)."
+          },
+          "customer_plant_name": {
+            "type": "string",
+            "description": "The customer's plant/site, e.g. 'Renault Flins'."
+          },
+          "avocarbon_plant": {
+            "allOf": [{ "$ref": "#/components/schemas/PlantEnum" }],
+            "description": "The responsible AVOCarbon plant. Also drives notification routing."
+          },
+          "avocarbon_product_type": {
+            "type": "string",
+            "description": "AVOCarbon product type, e.g. CHOKE, BRUSH, SLIP RING, HARNESS, SOLENOIDE, etc."
+          },
+          "product_line": {
+            "type": "string",
+            "enum": ["ASSEMBLY", "BRUSH", "CHOKE", "SEAL", "FRICTION"],
+            "description": "AVOCarbon product line."
+          },
+          "quality_issue_warranty": {
+            "type": "string",
+            "enum": ["CS2", "CS1", "WR", "Quality Alert"],
+            "description": "Claim type / severity. CS2 = critical, CS1 = major, WR = warranty."
+          },
+          "potential_avocarbon_process_linked_to_problem": {
+            "type": "string",
+            "enum": [
+              "ASSEMBLY", "TESTING", "WINDING", "GLUING", "BAKING", "GRINDING",
+              "PILLING", "CRIMPING", "WELDING", "SOLDERING", "INSPECTION",
+              "PLASTIC INJECTION", "PLASTIC DEFLASHING", "PRODUCT TREACEABILITY",
+              "SHIPPING", "LAPPING", "TAMPING"
+            ],
+            "description": "Manufacturing process likely linked to the problem."
+          },
+          "defects": {
+            "type": "string",
+            "enum": ["Function", "Fit", "Dimensional", "Appearance"],
+            "description": "Defect category."
+          },
+          "customer_complaint_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Date the customer raised the complaint (YYYY-MM-DD)."
+          },
+          "concerned_application": {
+            "type": "string",
+            "description": "Optional. End application, e.g. FRONT WIPER, STARTER, WINDOW LIFT."
+          },
+          "repetitive_complete_with_number": {
+            "type": "string",
+            "description": "Optional. Number of prior occurrences ('0' if first time)."
+          }
+        }
+      },
       "AttachmentIn": {
         "type": "object",
         "required": ["filename"],
@@ -210,13 +279,13 @@
           "source_message_id": {
             "type": "string",
             "maxLength": 998,
-            "description": "RFC 5322 Message-ID of the email — the dedup key. ALWAYS send this."
+            "description": "A STABLE, UNIQUE id for this email — the dedup key. Prefer the RFC 5322 Message-ID (internetMessageId) if the connector exposes it; otherwise use the Outlook/Microsoft Graph message id (also stable and unique). ALWAYS send the SAME id for the same email so re-processing is idempotent."
           },
           "conversation_id": {
             "type": "string",
             "maxLength": 512,
             "nullable": true,
-            "description": "Mail thread id — follow-ups attach to the same complaint."
+            "description": "Mail thread id — the Outlook/Graph conversationId. Send it so follow-up emails on the same thread attach to the same complaint."
           },
           "sender_email": {
             "type": "string",
@@ -238,9 +307,8 @@
             "items": { "$ref": "#/components/schemas/AttachmentIn" }
           },
           "extracted_data": {
-            "type": "object",
-            "additionalProperties": true,
-            "description": "AI-extracted complaint fields (all optional): complaint_name, customer, customer_plant_name, avocarbon_plant, avocarbon_product_type, product_line, quality_issue_warranty, defects, complaint_description, customer_complaint_date, etc."
+            "allOf": [{ "$ref": "#/components/schemas/ExtractedData" }],
+            "description": "Complaint fields extracted from the email AND its attachments. Fill as many as the source provides. If the required fields are all valid the backend auto-creates the complaint; otherwise a human completes it. Read attachments too — the complaint is sometimes entirely inside a PDF/Excel."
           },
           "ai_notes": {
             "type": "string",
@@ -261,15 +329,22 @@
       },
       "EmailIntakeResult": {
         "type": "object",
+        "required": ["status", "intake_id"],
+        "description": "Result of registering the email. Report status and intake_id back to the user.",
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["created", "duplicate", "attached_to_existing"]
+            "enum": ["created", "duplicate", "attached_to_existing"],
+            "description": "created = new intake stored; duplicate = same Message-ID already ingested (no-op); attached_to_existing = follow-up attached to an open thread."
           },
-          "intake_id": { "type": "integer" },
+          "intake_id": {
+            "type": "integer",
+            "description": "ID of the intake row — use it to fetch, assign a CQT, or promote."
+          },
           "notified_to": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": { "type": "string" },
+            "description": "Emails notified (plant QM/PM, or the triage fallback if the plant is unknown)."
           }
         }
       },
