@@ -174,10 +174,33 @@
       "AttachmentIn": {
         "type": "object",
         "required": ["filename"],
+        "description": "One email attachment. For real files, ALWAYS send download_url (the Microsoft Graph signed download URL from the Outlook connector) — the backend downloads and stores the file at ingestion. Do NOT send base64. Set is_inline=true for embedded images (signatures/logos): they are skipped. Analyze each file and provide a short human description; if the file contains complaint information (the complaint may be entirely inside an attachment), also extract it into extracted_data.",
         "properties": {
           "filename": { "type": "string" },
-          "url": { "type": "string", "nullable": true },
-          "mime_type": { "type": "string", "nullable": true }
+          "mime_type": { "type": "string", "nullable": true },
+          "size": { "type": "integer", "nullable": true, "description": "Size in bytes if known" },
+          "download_url": {
+            "type": "string",
+            "nullable": true,
+            "description": "Short-lived signed download URL (MS Graph). The backend fetches it immediately, so send it fresh."
+          },
+          "url": {
+            "type": "string",
+            "nullable": true,
+            "description": "Fallback: an already-hosted durable URL, used only if download_url is absent."
+          },
+          "sha256": { "type": "string", "nullable": true, "description": "SHA-256 hex for integrity verification" },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Short description of the file's content, e.g. 'Customer 8D report PDF', 'Photo of cracked part', 'Excel measurement data'."
+          },
+          "is_inline": {
+            "type": "boolean",
+            "description": "True for inline/embedded images (signatures, logos) — skipped by the backend.",
+            "default": false
+          },
+          "content_id": { "type": "string", "nullable": true }
         }
       },
       "EmailIntakeCreate": {

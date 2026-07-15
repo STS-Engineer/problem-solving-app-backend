@@ -9,9 +9,32 @@ from app.models.enums import PlantEnum
 
 
 class AttachmentIn(BaseModel):
+    """
+    One email attachment as forwarded by the MCP agent.
+
+    Preferred: the agent passes `download_url` (the short-lived Microsoft Graph
+    signed URL from the Outlook connector) and the backend fetches the bytes at
+    ingestion. `url` is an optional fallback for an already-hosted durable link.
+    Inline images (signatures/logos) should set is_inline=True — they are skipped.
+    """
+
     filename: str
-    url: Optional[str] = None
     mime_type: Optional[str] = None
+    size: Optional[int] = Field(None, description="Size in bytes, if known")
+    # Short-lived Graph signed URL — backend downloads this at ingestion.
+    download_url: Optional[str] = Field(
+        None, description="Signed temporary download URL (e.g. MS Graph)"
+    )
+    # Optional already-hosted durable URL (used only if download_url is absent).
+    url: Optional[str] = None
+    sha256: Optional[str] = Field(None, description="SHA-256 for integrity check")
+    description: Optional[str] = Field(
+        None, description="Agent-generated description of the file's content"
+    )
+    is_inline: bool = Field(
+        False, description="Inline/embedded image (signature, logo) — skipped by default"
+    )
+    content_id: Optional[str] = None
 
 
 class EmailIntakeCreate(BaseModel):

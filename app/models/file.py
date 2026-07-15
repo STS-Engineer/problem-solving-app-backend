@@ -25,9 +25,26 @@ class File(Base):
     stored_path = Column(String(500), nullable=False, unique=True)
     size_bytes = Column(BigInteger, nullable=False)
     mime_type = Column(String(100))
+    # Nullable: files that arrive by email (via the MCP intake) have no user.
     uploaded_by = Column(
-        Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+        Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True
     )
+    # Origin of the file — e.g. 'email_intake' for MCP-ingested attachments.
+    source = Column(String(30), nullable=True, index=True)
+    # Direct ownership links (no StepFile needed for intake attachments).
+    intake_id = Column(
+        Integer,
+        ForeignKey("email_intake.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    complaint_id = Column(
+        Integer,
+        ForeignKey("complaints.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    description = Column(String(1000), nullable=True, comment="Agent-generated file description")
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True
     )

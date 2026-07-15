@@ -31,7 +31,8 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # ── File validation ───────────────────────────────────────────────────────────
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB (escalation-action attachments)
+INTAKE_MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB (email-intake attachments)
 ALLOWED_EXTENSIONS = {
     ".pdf",
     ".jpg",
@@ -122,8 +123,17 @@ def _force_https_url(url: str) -> str:
     return urlunparse(parsed._replace(scheme="https"))
 
 
-def get_blob_sas_url(blob_name: str, expiry_days: int = 7) -> str:
-    """Generate a fresh read-only SAS URL for an existing blob."""
+def get_blob_sas_url(
+    blob_name: str,
+    expiry_days: int = 7,
+    content_disposition: Optional[str] = None,
+) -> str:
+    """
+    Generate a fresh read-only SAS URL for an existing blob.
+
+    content_disposition: when set (e.g. 'attachment; filename="x.pdf"'), the
+    browser is told to download the file instead of previewing it.
+    """
     import datetime as dt
 
     from azure.storage.blob import BlobSasPermissions, generate_blob_sas
@@ -147,6 +157,7 @@ def get_blob_sas_url(blob_name: str, expiry_days: int = 7) -> str:
         blob_name=blob_name,
         permission=BlobSasPermissions(read=True),
         expiry=dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=expiry_days),
+        content_disposition=content_disposition,
     )
     return f"{_force_https_url(blob_client.url)}?{sas_token}"
 
@@ -154,6 +165,16 @@ def get_blob_sas_url(blob_name: str, expiry_days: int = 7) -> str:
 def get_blob_url(blob_name: str) -> str:
     """Long-lived URL suitable for storing alongside the audit event."""
     return get_blob_sas_url(blob_name, expiry_days=3650)  # 10 years
+
+
+def get_blob_download_url(blob_name: str, filename: str) -> str:
+    """Long-lived URL that forces a download (Content-Disposition: attachment)."""
+    safe = _safe_filename(filename)
+    return get_blob_sas_url(
+        blob_name,
+        expiry_days=3650,
+        content_disposition=f'attachment; filename="{safe}"',
+    )
 
 
 def get_fresh_doc_url(file_url: str, expiry_days: int = 7) -> str:
@@ -248,6 +269,69 @@ async def upload_escalation_attachment(
         folder="escalations",
         prefix=f"esc_{complaint_id}_{safe_step}_l{level}",
     )
+
+
+def upload_bytes(
+    *,
+    content: bytes,
+    original_name: str,
+    folder: str,
+    prefix: str,
+    mime_type: Optional[str] = None,
+    max_size: int = INTAKE_MAX_FILE_SIZE,
+) -> dict:
+    """
+    Upload raw bytes (already in memory, e.g. downloaded from a Graph URL) to
+    Blob Storage. Synchronous — safe to call from the sync intake path.
+
+    Returns {blob_name, file_url, filename, mimetype, size}.
+    Raises HTTPException(400) on empty / oversized / disallowed-type files.
+    """
+    _require_configured()
+
+    from azure.core.exceptions import AzureError
+    from azure.storage.blob import ContentSettings
+
+    original = _safe_filename(original_name or "file")
+    ext = _validate_extension(original)  # raises 400 if not allowed
+
+    size = len(content)
+    if size == 0:
+        raise HTTPException(status_code=400, detail="Downloaded file is empty.")
+    if size > max_size:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"File too large ({size / 1_048_576:.1f} MB). "
+                f"Max allowed: {max_size // 1_048_576} MB."
+            ),
+        )
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    blob_filename = f"{prefix}_{timestamp}_{original}"
+    blob_name = _build_blob_name(folder, blob_filename)
+
+    mimetype = mime_type or MIME_TYPES.get(ext, "application/octet-stream")
+    try:
+        container = _get_container_client()
+        blob_client = container.get_blob_client(blob_name)
+        blob_client.upload_blob(
+            content,
+            overwrite=True,
+            content_settings=ContentSettings(content_type=mimetype),
+        )
+        logger.info("Uploaded blob: %s  (%d bytes)", blob_name, size)
+    except AzureError as exc:
+        logger.error("Azure upload error for %s: %s", blob_name, exc)
+        raise HTTPException(status_code=500, detail=f"File upload failed: {exc}")
+
+    return {
+        "blob_name": blob_name,
+        "file_url": get_blob_url(blob_name),
+        "filename": original,
+        "mimetype": mimetype,
+        "size": size,
+    }
 
 
 async def delete_blob(blob_name: str) -> bool:

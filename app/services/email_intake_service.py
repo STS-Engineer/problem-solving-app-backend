@@ -33,6 +33,10 @@ from app.models.plant_contacts import PlantContact
 from app.schemas.complaint import ComplaintCreate
 from app.schemas.email_intake import EmailIntakeCreate
 from app.services.complaint_service import ComplaintService
+from app.services.intake_attachments import (
+    link_intake_files_to_complaint,
+    process_intake_attachments,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +313,22 @@ class EmailIntakeService:
         db.commit()
         db.refresh(intake)
 
+        # ── 3b. Download + store attachments → File rows (best-effort) ───────
+        try:
+            enriched = process_intake_attachments(
+                db, intake.id, [a.model_dump() for a in payload.attachments]
+            )
+            intake.attachments = enriched
+            db.commit()
+            db.refresh(intake)
+        except Exception as exc:
+            logger.warning(
+                "intake %s: attachment processing failed — keeping intake: %s",
+                intake.id,
+                exc,
+            )
+            db.rollback()
+
         # ── 4. Notify (plant contacts or fallback) ──────────────────────────
         recipients = _resolve_recipients(db, plant)
         _notify(intake, recipients)
@@ -499,6 +519,7 @@ class EmailIntakeService:
         complaint = EmailIntakeService._create_complaint_from_intake(db, intake, normalized)
         intake.status = "promoted"
         intake.complaint_id = complaint.id
+        link_intake_files_to_complaint(db, intake.id, complaint.id)
         db.commit()
         db.refresh(intake)
         logger.info(
@@ -554,6 +575,7 @@ class EmailIntakeService:
         complaint = ComplaintService.create_complaint(db=db, payload=data)
         intake.status = "promoted"
         intake.complaint_id = complaint.id
+        link_intake_files_to_complaint(db, intake.id, complaint.id)
         db.commit()
         db.refresh(intake)
         logger.info("intake %s completed -> complaint %s", intake.id, complaint.id)
