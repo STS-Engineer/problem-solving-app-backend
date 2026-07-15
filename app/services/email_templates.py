@@ -338,3 +338,121 @@ def build_escalation_email(
 </html>"""
 
     return subject, html
+
+
+# ── Intake (pre-complaint) escalation reminder ──────────────────────────────
+
+
+def build_intake_escalation_email(
+    *,
+    intake_id: int,
+    stage: str,
+    level: int,
+    hours_waiting: float,
+    sender_email: str | None,
+    subject_line: str | None,
+    plant: str | None,
+    assigned_cqe_email: str | None,
+    review_base_url: str,
+    test_mode: bool = False,
+) -> tuple[str, str]:
+    """
+    Reminder for an email complaint that has not yet entered the complaint list.
+
+    stage 'awaiting_cqt'        → a QM must assign a CQT
+    stage 'awaiting_complaint'  → the assigned CQT must create the complaint
+    """
+    waited = (
+        f"{hours_waiting * 60:.0f} min" if test_mode else f"{hours_waiting:.1f} h"
+    )
+    base = (review_base_url or "").rstrip("/")
+
+    if stage == "awaiting_cqt":
+        headline = "Email complaint awaiting a CQT assignment"
+        action = (
+            "This complaint arrived by email and no CQT has been assigned yet. "
+            "Please assign a CQT so the 8D process can start."
+        )
+        cta_label = "Review &amp; assign a CQT"
+        cta_url = f"{base}/intake/{intake_id}"
+    else:  # awaiting_complaint
+        headline = "Assigned complaint not yet created"
+        action = (
+            "A CQT was assigned to this email complaint but the 8D complaint has "
+            "not been created yet. Please complete and create it."
+        )
+        cta_label = "Complete &amp; create the complaint"
+        cta_url = f"{base}/intake/{intake_id}/complete"
+
+    subject = (
+        f"⏰ [Intake #{intake_id}] {headline} — reminder L{level} "
+        f"(waiting {waited})"
+    )
+
+    def _row(label: str, value: str | None) -> str:
+        return (
+            f'<tr><td style="padding:6px 0;font-weight:700;color:{_NAVY};width:38%;">'
+            f'{label}</td><td style="padding:6px 0;color:#3D5066;">{value or "—"}</td></tr>'
+        )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#F2F4F7;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F2F4F7;padding:32px 0">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%">
+        <tr>
+          <td style="background:{_NAVY};border-radius:10px 10px 0 0;padding:20px 32px;border-bottom:3px solid {_ORANGE}">
+            <div style="font-family:monospace;font-size:11px;font-weight:700;color:{_ORANGE};letter-spacing:0.1em;margin-bottom:4px">
+              AVOCARBON · EMAIL INTAKE
+            </div>
+            <div style="font-size:20px;font-weight:800;color:white;letter-spacing:-0.02em">
+              {headline}
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td style="background:#FFF7ED;border-left:4px solid {_ORANGE};padding:14px 32px">
+            <div style="font-size:13px;font-weight:800;color:{_ORANGE};letter-spacing:0.05em">
+              REMINDER · LEVEL {level} · WAITING {waited.upper()}
+            </div>
+            <div style="font-size:13px;color:#3D5066;margin-top:4px;line-height:1.5">
+              {action}
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td style="background:white;padding:22px 32px">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:13px">
+              {_row("Intake", f"#{intake_id}")}
+              {_row("From", sender_email)}
+              {_row("Subject", subject_line)}
+              {_row("Plant", plant)}
+              {_row("Assigned CQT", assigned_cqe_email)}
+            </table>
+            <div style="margin:22px 0 4px">
+              <a href="{cta_url}"
+                 style="display:inline-block;background:{_ORANGE};color:#fff;text-decoration:none;
+                        padding:11px 22px;border-radius:6px;font-size:14px;font-weight:700">
+                {cta_label}
+              </a>
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td style="background:white;border-radius:0 0 10px 10px;padding:0 32px 24px">
+            <p style="font-size:12px;color:#8A95A8;border-top:1px solid #eee;padding-top:14px;margin:0">
+              Automated reminder — this complaint has not yet entered the 8D
+              workflow. It will keep escalating until a CQT is assigned and the
+              complaint is created.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+    return subject, html

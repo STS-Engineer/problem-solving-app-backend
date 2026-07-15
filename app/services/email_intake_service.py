@@ -381,6 +381,11 @@ class EmailIntakeService:
         intake.assigned_cqe_email = cqe_email
         intake.assigned_by = (assigned_by or "").strip() or None
         intake.assigned_at = datetime.now(timezone.utc)
+        # Stage transition awaiting_cqt → awaiting_complaint: restart the
+        # escalation clock so the CQT gets a fresh reminder ladder.
+        intake.escalation_stage = "awaiting_complaint"
+        intake.escalation_count = 0
+        intake.escalation_sent_at = None
         db.commit()
         db.refresh(intake)
 

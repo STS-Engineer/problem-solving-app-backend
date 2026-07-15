@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from app.db.session import SessionLocal
 from app.services.escalation_service import check_and_escalate_all, retry_failed_emails
+from app.services.intake_escalation_service import check_and_escalate_intakes
 
 logger = logging.getLogger(__name__)
 load_dotenv()
@@ -27,6 +28,9 @@ RETRY_INTERVAL_MINUTES = 10
 
 LOCK_ID_ESCALATION = 8_001
 LOCK_ID_EMAIL_RETRY = 8_002
+LOCK_ID_INTAKE_ESCALATION = 8_003
+
+INTAKE_CHECK_INTERVAL_MINUTES = 3 if TEST_MODE else 30
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -105,6 +109,14 @@ def _run_email_retry() -> None:
     _run_job(LOCK_ID_EMAIL_RETRY, retry_failed_emails, "Email retry")
 
 
+def _run_intake_escalation_check() -> None:
+    _run_job(
+        LOCK_ID_INTAKE_ESCALATION,
+        check_and_escalate_intakes,
+        "Intake escalation check",
+    )
+
+
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 
@@ -131,6 +143,13 @@ def start_scheduler() -> None:
         trigger=IntervalTrigger(minutes=RETRY_INTERVAL_MINUTES),
         id="email_retry",
         name="Email Outbox Retry",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _run_intake_escalation_check,
+        trigger=IntervalTrigger(minutes=INTAKE_CHECK_INTERVAL_MINUTES),
+        id="intake_escalation_check",
+        name="Email Intake (pre-complaint) Escalation Check",
         replace_existing=True,
     )
 
@@ -160,4 +179,6 @@ def is_scheduler_running() -> bool:
     if _scheduler is None or not _scheduler.running:
         return False
     job_ids = {job.id for job in _scheduler.get_jobs()}
-    return {"escalation_check", "email_retry"}.issubset(job_ids)
+    return {"escalation_check", "email_retry", "intake_escalation_check"}.issubset(
+        job_ids
+    )

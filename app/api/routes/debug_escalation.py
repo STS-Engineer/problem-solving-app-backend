@@ -210,3 +210,65 @@ def trigger_escalation(db: Session = Depends(get_db)):
         "steps_evaluated": len(results),
         "results": results,
     }
+
+
+# ── Intake (pre-complaint) escalation ─────────────────────────────────────────
+
+
+@router.post("/trigger-intake-escalation")
+def trigger_intake_escalation(db: Session = Depends(get_db)):
+    """
+    Manually run the pre-complaint intake escalation and return what it did.
+
+    Chases email intakes that have NOT yet entered the complaint list:
+      - awaiting_cqt       : received, no CQT assigned
+      - awaiting_complaint : CQT assigned, complaint not created
+    """
+    from app.models.email_intake import EmailIntake
+    from app.services.intake_escalation_service import (
+        _current_stage,
+        _anchor,
+        _level_to_send,
+        check_and_escalate_intakes,
+    )
+
+    # Snapshot of chaseable intakes before the run (for visibility).
+    intakes = (
+        db.query(EmailIntake)
+        .filter(
+            EmailIntake.complaint_id.is_(None),
+            EmailIntake.status == "pending_review",
+        )
+        .all()
+    )
+    preview = []
+    for it in intakes:
+        stage = _current_stage(it)
+        hours = None
+        level = None
+        if stage:
+            anchor = _anchor(it, stage)
+            if anchor:
+                hours = round(
+                    (datetime.now(timezone.utc) - anchor).total_seconds() / 3600, 2
+                )
+                level = _level_to_send(hours, it.escalation_count or 0, stage)
+        preview.append(
+            {
+                "intake_id": it.id,
+                "stage": stage,
+                "plant": it.detected_plant.value if it.detected_plant else None,
+                "assigned_cqt": it.assigned_cqe_email,
+                "hours_waiting": hours,
+                "escalation_count_before": it.escalation_count,
+                "level_to_send": level,
+            }
+        )
+
+    sent = check_and_escalate_intakes(db)
+
+    return {
+        "intakes_evaluated": len(intakes),
+        "reminders_sent": sent,
+        "preview": preview,
+    }

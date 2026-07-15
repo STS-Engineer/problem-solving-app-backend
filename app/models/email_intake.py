@@ -82,6 +82,32 @@ class EmailIntake(Base):
     notified_to = Column(JSON, nullable=False, default=list, comment="Emails notified on intake")
     reject_reason = Column(Text, nullable=True)
 
+    # ── Pre-complaint escalation (intake not yet promoted) ──────────────────
+    # Chases the intake while it sits before entering the complaint list:
+    #   stage 'awaiting_cqt'       — received, no CQT assigned (chase QM/PM)
+    #   stage 'awaiting_complaint' — CQT assigned, complaint not created (chase CQT)
+    # escalation_count is the highest level already sent for the CURRENT stage;
+    # it resets to 0 when the stage changes (e.g. once a CQT is assigned).
+    escalation_stage = Column(
+        String(30),
+        nullable=True,
+        comment="awaiting_cqt | awaiting_complaint | None (resolved)",
+    )
+    escalation_count = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="Highest escalation level sent for the current stage",
+    )
+    escalation_sent_at = Column(DateTime, nullable=True)
+    escalation_log = Column(
+        JSON,
+        nullable=False,
+        default=list,
+        comment="Trail of {stage, level, recipients, sent_at} — intakes have no audit table",
+    )
+
     # ── CQT assignment (internal AVOCarbon Customer Quality Engineer) ──────
     # QM/PM are auto-resolved from plant_contacts; the CQT is assigned manually
     # by the QM via a form, then notified with a link to complete the complaint.

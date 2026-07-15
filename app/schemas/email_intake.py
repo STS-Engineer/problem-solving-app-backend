@@ -101,6 +101,12 @@ class EmailIntakeRead(BaseModel):
     complaint_id: Optional[int]
     created_at: datetime
 
+    # Pre-complaint escalation state
+    escalation_stage: Optional[str] = None
+    escalation_count: int = 0
+    escalation_sent_at: Optional[datetime] = None
+    escalation_log: List[Any] = Field(default_factory=list)
+
     class Config:
         from_attributes = True
 
@@ -117,6 +123,11 @@ class EmailIntakeListItem(BaseModel):
     assigned_cqe_email: Optional[str]
     complaint_id: Optional[int]
     created_at: datetime
+
+    # Pre-complaint escalation state (for the review list badges)
+    escalation_stage: Optional[str] = None
+    escalation_count: int = 0
+    escalation_sent_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
