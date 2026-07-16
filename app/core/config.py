@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     INTAKE_API_KEY: str = ""
     # Recipient used when the plant of an incoming complaint cannot be resolved.
     INTAKE_FALLBACK_EMAIL: str = (
-        "esperanza.deaquino@avocarbon.com"  # hayfa.rajhi@avocarbon.com"
+        "hayfa.rajhi@avocarbon.com"  # "esperanza.deaquino@avocarbon.com"  #
     )
     # Base URL of the frontend, used to build the review link in notifications.
     INTAKE_REVIEW_BASE_URL: str = (
