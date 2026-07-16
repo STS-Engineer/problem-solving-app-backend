@@ -50,7 +50,8 @@ STAGE_AWAITING_COMPLAINT = "awaiting_complaint"
 _MAX_LEVEL = 3
 
 # Final escalation recipient for stage 1 (COO). Overridable via env.
-_ESCALATION_FINAL_EMAIL = os.getenv("COO_EMAIL", "roberto.gonzalez@avocarbon.com")
+# _ESCALATION_FINAL_EMAIL = os.getenv("COO_EMAIL", "roberto.gonzalez@avocarbon.com")
+_ESCALATION_FINAL_EMAIL = os.getenv("COO_EMAIL", "hayfa.rajhi@avocarbon.com")
 
 
 # ── Thresholds (PROVISIONAL) ────────────────────────────────────────────────
@@ -70,7 +71,9 @@ def _parse_hours(env_key: str, default: str) -> list[float]:
         try:
             out.append(float(part))
         except ValueError:
-            logger.warning("intake-escalation: bad hour %r in %s — ignored", part, env_key)
+            logger.warning(
+                "intake-escalation: bad hour %r in %s — ignored", part, env_key
+            )
     return out
 
 
@@ -97,7 +100,9 @@ def _recipients(
     email (INTAKE_FALLBACK_EMAIL) when the plant / its contacts are unknown.
     """
     qm = list(contact.quality_manager_emails or []) if contact else []
-    pm = [contact.plant_manager_email] if contact and contact.plant_manager_email else []
+    pm = (
+        [contact.plant_manager_email] if contact and contact.plant_manager_email else []
+    )
     final = [_ESCALATION_FINAL_EMAIL] if _ESCALATION_FINAL_EMAIL else []
     cqt = [intake.assigned_cqe_email] if intake.assigned_cqe_email else []
 
