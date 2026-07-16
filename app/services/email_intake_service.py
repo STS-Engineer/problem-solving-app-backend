@@ -1,26 +1,27 @@
 """
 app/services/email_intake_service.py
-════════════════════════════════════
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 Lenient intake path for complaints received by email.
 
 Flow
-────
+â”€â”€â”€â”€
 1. Agent POSTs a (possibly incomplete) email to /intake/email.
-2. Dedup on source_message_id — a re-send returns the existing row.
+2. Dedup on source_message_id â€” a re-send returns the existing row.
 3. Follow-up on a known conversation_id attaches instead of duplicating.
 4. Otherwise store a pending_review row.
 5. Notify the resolved plant's contacts (CQE + QM + PM + GM), or the
    configured fallback triage email when the plant is unknown.
 
-Nothing here runs the strict ComplaintCreate validation — that happens only
+Nothing here runs the strict ComplaintCreate validation â€” that happens only
 later, at promotion time, when a human has completed the missing fields.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
@@ -40,11 +41,84 @@ from app.services.intake_attachments import (
 
 logger = logging.getLogger(__name__)
 
+_KNOWN_EXTRACTED_FIELDS = (
+    "complaint_name",
+    "customer",
+    "customer_plant_name",
+    "avocarbon_plant",
+    "avocarbon_product_type",
+    "product_line",
+    "quality_issue_warranty",
+    "potential_avocarbon_process_linked_to_problem",
+    "defects",
+    "complaint_description",
+    "customer_complaint_date",
+    "concerned_application",
+    "repetitive_complete_with_number",
+)
+_FIELD_NAME_MAP = {field.lower(): field for field in _KNOWN_EXTRACTED_FIELDS}
+_FIELD_PATTERN = re.compile(
+    r"(?P<field>"
+    + "|".join(re.escape(field) for field in _KNOWN_EXTRACTED_FIELDS)
+    + r")\\s*=\\s*(?P<value>.*?)(?=(?:;|\\r?\\n)\\s*(?:"
+    + "|".join(re.escape(field) for field in _KNOWN_EXTRACTED_FIELDS)
+    + r")\\s*=|$)",
+    re.IGNORECASE | re.DOTALL,
+)
 
-# ── Plant resolution ────────────────────────────────────────────────────────
+
+def _as_extracted_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if hasattr(value, "model_dump"):
+        return dict(value.model_dump(exclude_none=True))
+    return dict(value or {})
 
 
-def _resolve_plant(payload: EmailIntakeCreate) -> Optional[PlantEnum]:
+def _extract_fields_from_text(text: Optional[str]) -> dict[str, str]:
+    if not text or "=" not in text:
+        return {}
+
+    recovered: dict[str, str] = {}
+    for match in _FIELD_PATTERN.finditer(text):
+        field = _FIELD_NAME_MAP.get(match.group("field").lower())
+        value = match.group("value").strip().strip(";")
+        if field and value:
+            recovered.setdefault(field, value)
+    return recovered
+
+
+def _merge_extracted_data_from_fallbacks(payload: EmailIntakeCreate) -> dict[str, Any]:
+    extracted = _as_extracted_dict(payload.extracted_data)
+    recovered: dict[str, str] = {}
+
+    text_sources: list[Optional[str]] = [payload.ai_notes, payload.raw_body]
+    text_sources.extend(getattr(att, "description", None) for att in (payload.attachments or []))
+
+    for text in text_sources:
+        for field, value in _extract_fields_from_text(text).items():
+            if field in extracted and str(extracted[field]).strip():
+                continue
+            recovered.setdefault(field, value)
+
+    if recovered:
+        logger.info(
+            "intake: recovered %d extracted_data field(s) from fallback text",
+            len(recovered),
+        )
+
+    merged = dict(recovered)
+    merged.update(extracted)
+    return merged
+
+
+
+# â”€â”€ Plant resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def _resolve_plant(
+    payload: EmailIntakeCreate, extracted_data: Optional[dict[str, Any]] = None
+) -> Optional[PlantEnum]:
     """
     Determine the plant from the explicit field or from extracted_data.
     Returns None when it cannot be mapped to a valid PlantEnum value.
@@ -52,7 +126,9 @@ def _resolve_plant(payload: EmailIntakeCreate) -> Optional[PlantEnum]:
     if payload.detected_plant is not None:
         return payload.detected_plant
 
-    raw = (payload.extracted_data or {}).get("avocarbon_plant")
+    raw = (extracted_data or _as_extracted_dict(payload.extracted_data)).get(
+        "avocarbon_plant"
+    )
     if not raw:
         return None
     try:
@@ -68,7 +144,7 @@ def _resolve_recipients(db: Session, plant: Optional[PlantEnum]) -> list[str]:
     (the managers who triage and assign a CQT). CQE(s) are notified later,
     once the QM assigns them.
 
-    Plant unknown OR no managers seeded → fallback triage email.
+    Plant unknown OR no managers seeded â†’ fallback triage email.
     """
     if plant is not None:
         contact = (
@@ -79,34 +155,34 @@ def _resolve_recipients(db: Session, plant: Optional[PlantEnum]) -> list[str]:
             if recipients:
                 return recipients
             logger.warning(
-                "intake: plant %s has a contacts row but no QM/PM — using fallback",
+                "intake: plant %s has a contacts row but no QM/PM â€” using fallback",
                 plant,
             )
         else:
             logger.warning(
-                "intake: no plant_contacts row for %s — using fallback", plant
+                "intake: no plant_contacts row for %s â€” using fallback", plant
             )
 
     fallback = settings.INTAKE_FALLBACK_EMAIL.strip()
     return [fallback] if fallback else []
 
 
-# ── Notification ──────────────────────────────────────────────────────────────
+# â”€â”€ Notification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _build_notification(intake: EmailIntake) -> tuple[str, str]:
     ref = f"#{intake.id}"
-    subject = f"[AVOCarbon] New email complaint {ref} — needs review"
+    subject = f"[AVOCarbon] New email complaint {ref} â€” needs review"
 
     review_url = f"{settings.INTAKE_REVIEW_BASE_URL.rstrip('/')}/intake/{intake.id}"
     ed = intake.extracted_data or {}
-    missing = ", ".join(intake.missing_fields or []) or "—"
+    missing = ", ".join(intake.missing_fields or []) or "â€”"
     plant = intake.detected_plant.value if intake.detected_plant else "Unknown"
 
     def _row(label: str, value) -> str:
         return (
             f'<tr><td style="padding:6px 0;font-weight:700;color:#1A2332;width:38%;">'
-            f'{label}</td><td style="padding:6px 0;color:#4A5568;">{value or "—"}</td></tr>'
+            f'{label}</td><td style="padding:6px 0;color:#4A5568;">{value or "â€”"}</td></tr>'
         )
 
     body_html = f"""
@@ -115,10 +191,10 @@ def _build_notification(intake: EmailIntake) -> tuple[str, str]:
       <div style="background:#fff;border-radius:8px;padding:26px;
                   border-left:4px solid #1A73E8;box-shadow:0 2px 8px rgba(0,0,0,0.07);">
         <h2 style="margin:0 0 4px;color:#1A2332;font-size:18px;">New complaint received by email</h2>
-        <p style="margin:0 0 18px;color:#8A95A8;font-size:13px;">Intake {ref} — status: pending review</p>
+        <p style="margin:0 0 18px;color:#8A95A8;font-size:13px;">Intake {ref} â€” status: pending review</p>
 
         <table style="width:100%;border-collapse:collapse;font-size:13px;">
-          {_row("From", f"{intake.sender_name or ''} &lt;{intake.sender_email or '—'}&gt;")}
+          {_row("From", f"{intake.sender_name or ''} &lt;{intake.sender_email or 'â€”'}&gt;")}
           {_row("Subject", intake.subject)}
           {_row("Plant", plant)}
           {_row("Customer", ed.get("customer"))}
@@ -156,9 +232,9 @@ def _build_cqe_assignment_email(
     """
     Email sent to the CQT once the QM assigns them.
 
-    created=True  → the complaint was auto-created (all data complete); the link
+    created=True  â†’ the complaint was auto-created (all data complete); the link
                     opens the live complaint.
-    created=False → data is incomplete; the link opens the completion form where
+    created=False â†’ data is incomplete; the link opens the completion form where
                     the CQT fills the missing fields and creates the complaint.
     """
     ref = f"#{intake.id}"
@@ -176,8 +252,8 @@ def _build_cqe_assignment_email(
         btn_color = "#0B8A5B"
         missing_block = ""
     else:
-        subject = f"[AVOCarbon] Complaint {ref} assigned — please complete missing data"
-        headline = "You have been assigned a complaint — action needed"
+        subject = f"[AVOCarbon] Complaint {ref} assigned â€” please complete missing data"
+        headline = "You have been assigned a complaint â€” action needed"
         intro = (
             "A customer complaint received by email has been assigned to you. Some "
             "required information is missing, so please open the completion form, fill "
@@ -185,7 +261,7 @@ def _build_cqe_assignment_email(
         )
         btn_label = "Complete &amp; create the complaint"
         btn_color = "#E8710A"
-        pretty = ", ".join((missing_fields or [])) or "—"
+        pretty = ", ".join((missing_fields or [])) or "â€”"
         missing_block = (
             f'<p style="margin:14px 0 0;font-size:13px;color:#C97B0A;">'
             f"<b>Missing fields:</b> {pretty}</p>"
@@ -197,13 +273,13 @@ def _build_cqe_assignment_email(
       <div style="background:#fff;border-radius:8px;padding:26px;
                   border-left:4px solid {btn_color};box-shadow:0 2px 8px rgba(0,0,0,0.07);">
         <h2 style="margin:0 0 4px;color:#1A2332;font-size:18px;">{headline}</h2>
-        <p style="margin:0 0 18px;color:#8A95A8;font-size:13px;">Intake {ref} — assigned by {intake.assigned_by or "your QM"}</p>
+        <p style="margin:0 0 18px;color:#8A95A8;font-size:13px;">Intake {ref} â€” assigned by {intake.assigned_by or "your QM"}</p>
         <p style="margin:0 0 14px;color:#4A5568;font-size:14px;">{intro}</p>
         <table style="width:100%;border-collapse:collapse;font-size:13px;color:#4A5568;">
           <tr><td style="padding:6px 0;font-weight:700;color:#1A2332;width:38%;">Subject</td>
-              <td style="padding:6px 0;">{intake.subject or "—"}</td></tr>
+              <td style="padding:6px 0;">{intake.subject or "â€”"}</td></tr>
           <tr><td style="padding:6px 0;font-weight:700;color:#1A2332;">Customer</td>
-              <td style="padding:6px 0;">{ed.get("customer") or "—"}</td></tr>
+              <td style="padding:6px 0;">{ed.get("customer") or "â€”"}</td></tr>
         </table>
         {missing_block}
         <div style="margin:22px 0 6px;">
@@ -221,17 +297,17 @@ def _build_cqe_assignment_email(
 
 def _notify(intake: EmailIntake, recipients: list[str]) -> None:
     if not recipients:
-        logger.error("intake %s: no recipients resolved — notification skipped", intake.id)
+        logger.error("intake %s: no recipients resolved â€” notification skipped", intake.id)
         return
     subject, body_html = _build_notification(intake)
     try:
         _send_sync(subject=subject, recipients=recipients, body_html=body_html, cc=None)
         logger.info("intake %s: notified %s", intake.id, recipients)
-    except Exception as exc:  # best-effort — the intake is already stored
+    except Exception as exc:  # best-effort â€” the intake is already stored
         logger.warning("intake %s: notification failed: %s", intake.id, exc)
 
 
-# ── Public entry point ──────────────────────────────────────────────────────
+# â”€â”€ Public entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 class EmailIntakeService:
@@ -242,7 +318,7 @@ class EmailIntakeService:
         Idempotent intake. Returns (intake, status) where status is one of:
         'created' | 'duplicate' | 'attached_to_existing'.
         """
-        # ── 1. Dedup on message id ──────────────────────────────────────────
+        # â”€â”€ 1. Dedup on message id â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         existing = (
             db.query(EmailIntake)
             .filter(EmailIntake.source_message_id == payload.source_message_id)
@@ -256,7 +332,7 @@ class EmailIntakeService:
             )
             return existing, "duplicate"
 
-        # ── 2. Thread follow-up → attach to the open intake on that thread ──
+        # â”€â”€ 2. Thread follow-up â†’ attach to the open intake on that thread â”€â”€
         if payload.conversation_id:
             thread = (
                 db.query(EmailIntake)
@@ -291,8 +367,13 @@ class EmailIntakeService:
                 )
                 return thread, "attached_to_existing"
 
-        # ── 3. Store a new pending_review row ───────────────────────────────
-        plant = _resolve_plant(payload)
+        # â”€â”€ 3. Store a new pending_review row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        extracted_data = _merge_extracted_data_from_fallbacks(payload)
+        missing_fields = list(payload.missing_fields or [])
+        if not missing_fields and extracted_data:
+            _, missing_fields = evaluate_completeness(extracted_data)
+
+        plant = _resolve_plant(payload, extracted_data)
         intake = EmailIntake(
             source_message_id=payload.source_message_id,
             conversation_id=payload.conversation_id,
@@ -303,9 +384,9 @@ class EmailIntakeService:
             raw_body=payload.raw_body,
             raw_html=payload.raw_html,
             attachments=[a.model_dump() for a in payload.attachments],
-            extracted_data=payload.extracted_data or {},
+            extracted_data=extracted_data,
             ai_notes=payload.ai_notes,
-            missing_fields=payload.missing_fields or [],
+            missing_fields=missing_fields,
             detected_plant=plant,
             status="pending_review",
         )
@@ -313,7 +394,7 @@ class EmailIntakeService:
         db.commit()
         db.refresh(intake)
 
-        # ── 3b. Download + store attachments → File rows (best-effort) ───────
+        # â”€â”€ 3b. Download + store attachments â†’ File rows (best-effort) â”€â”€â”€â”€â”€â”€â”€
         try:
             enriched = process_intake_attachments(
                 db, intake.id, [a.model_dump() for a in payload.attachments]
@@ -323,13 +404,13 @@ class EmailIntakeService:
             db.refresh(intake)
         except Exception as exc:
             logger.warning(
-                "intake %s: attachment processing failed — keeping intake: %s",
+                "intake %s: attachment processing failed â€” keeping intake: %s",
                 intake.id,
                 exc,
             )
             db.rollback()
 
-        # ── 4. Notify (plant contacts or fallback) ──────────────────────────
+        # â”€â”€ 4. Notify (plant contacts or fallback) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         recipients = _resolve_recipients(db, plant)
         _notify(intake, recipients)
         intake.notified_to = recipients
@@ -354,7 +435,7 @@ class EmailIntakeService:
         """
         Triage: set/correct the responsible plant on an intake. When renotify is
         True, notify that plant's QM/PM (used when the plant was Unknown and a
-        triager — e.g. Esperanza — has now identified the site).
+        triager â€” e.g. Esperanza â€” has now identified the site).
         """
         intake = db.get(EmailIntake, intake_id)
         if intake is None:
@@ -401,7 +482,7 @@ class EmailIntakeService:
         intake.assigned_cqe_email = cqe_email
         intake.assigned_by = (assigned_by or "").strip() or None
         intake.assigned_at = datetime.now(timezone.utc)
-        # Stage transition awaiting_cqt → awaiting_complaint: restart the
+        # Stage transition awaiting_cqt â†’ awaiting_complaint: restart the
         # escalation clock so the CQT gets a fresh reminder ladder.
         intake.escalation_stage = "awaiting_complaint"
         intake.escalation_count = 0
@@ -419,7 +500,7 @@ class EmailIntakeService:
             subject, body = _build_cqe_assignment_email(
                 intake, created=True, url=url, reference=result["reference_number"]
             )
-        else:  # incomplete → completion form
+        else:  # incomplete â†’ completion form
             url = f"{base}/intake/{intake.id}/complete"
             subject, body = _build_cqe_assignment_email(
                 intake, created=False, url=url, missing_fields=result["missing_fields"]
@@ -433,7 +514,7 @@ class EmailIntakeService:
                 cqe_email,
                 result["status"],
             )
-        except Exception as exc:  # best-effort — assignment is already saved
+        except Exception as exc:  # best-effort â€” assignment is already saved
             logger.warning(
                 "intake %s: CQT assignment saved but notification failed: %s",
                 intake.id,
@@ -443,7 +524,7 @@ class EmailIntakeService:
         db.refresh(intake)
         return intake
 
-    # ── Promotion (intake → real complaint) ────────────────────────────────
+    # â”€â”€ Promotion (intake â†’ real complaint) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @staticmethod
     def _create_complaint_from_intake(db: Session, intake: EmailIntake, normalized: dict):
@@ -490,7 +571,7 @@ class EmailIntakeService:
     def promote(db: Session, intake_id: int) -> dict:
         """
         Idempotent promotion. Returns a dict:
-          status ∈ {created, already_promoted, incomplete}
+          status âˆˆ {created, already_promoted, incomplete}
           complaint_id, reference_number, missing_fields
         Only creates a complaint when ALL required fields are present & valid.
         """
@@ -584,3 +665,5 @@ class EmailIntakeService:
             "complaint_id": complaint.id,
             "reference_number": complaint.reference_number,
         }
+
+
