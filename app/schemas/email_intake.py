@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from app.models.enums import PlantEnum
 
@@ -15,49 +15,26 @@ class AttachmentIn(BaseModel):
     Preferred: the agent passes `download_url` (the short-lived Microsoft Graph
     signed URL from the Outlook connector) and the backend fetches the bytes at
     ingestion. `url` is an optional fallback for an already-hosted durable link.
-    Inline images (signatures/logos) should set is_inline=True; they are skipped.
+    Inline images (signatures/logos) should set is_inline=True — they are skipped.
     """
 
     filename: str
     mime_type: Optional[str] = None
     size: Optional[int] = Field(None, description="Size in bytes, if known")
+    # Short-lived Graph signed URL — backend downloads this at ingestion.
     download_url: Optional[str] = Field(
         None, description="Signed temporary download URL (e.g. MS Graph)"
     )
+    # Optional already-hosted durable URL (used only if download_url is absent).
     url: Optional[str] = None
     sha256: Optional[str] = Field(None, description="SHA-256 for integrity check")
     description: Optional[str] = Field(
         None, description="Agent-generated description of the file's content"
     )
     is_inline: bool = Field(
-        False, description="Inline/embedded image (signature, logo); skipped by default"
+        False, description="Inline/embedded image (signature, logo) — skipped by default"
     )
     content_id: Optional[str] = None
-
-
-class ExtractedData(BaseModel):
-    """
-    Structured complaint facts extracted from the email body and attachments.
-
-    Keeping the common keys explicit gives the MCP/OpenAPI contract a cleaner
-    shape for agents, while `extra="allow"` preserves lenient staging.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    complaint_name: Optional[str] = None
-    customer: Optional[str] = None
-    customer_plant_name: Optional[str] = None
-    avocarbon_plant: Optional[str] = None
-    avocarbon_product_type: Optional[str] = None
-    product_line: Optional[str] = None
-    quality_issue_warranty: Optional[str] = None
-    potential_avocarbon_process_linked_to_problem: Optional[str] = None
-    defects: Optional[str] = None
-    complaint_description: Optional[str] = None
-    customer_complaint_date: Optional[str] = None
-    concerned_application: Optional[str] = None
-    repetitive_complete_with_number: Optional[str] = None
 
 
 class EmailIntakeCreate(BaseModel):
@@ -65,7 +42,7 @@ class EmailIntakeCreate(BaseModel):
     Lenient payload posted by the ChatGPT/MCP agent.
 
     The ONLY required field is source_message_id (the dedup key). Everything
-    else is best-effort; the whole point of staging is that we accept
+    else is best-effort — the whole point of staging is that we accept
     incomplete emails.
     """
 
@@ -81,12 +58,12 @@ class EmailIntakeCreate(BaseModel):
     raw_html: Optional[str] = None
     attachments: List[AttachmentIn] = Field(default_factory=list)
 
-    extracted_data: ExtractedData = Field(default_factory=ExtractedData)
+    extracted_data: Dict[str, Any] = Field(default_factory=dict)
     ai_notes: Optional[str] = None
     missing_fields: List[str] = Field(default_factory=list)
 
     # Optional explicit plant. If omitted, we try to read it from
-    # extracted_data["avocarbon_plant"]; if still unknown -> fallback email.
+    # extracted_data["avocarbon_plant"]; if still unknown → fallback email.
     detected_plant: Optional[PlantEnum] = None
 
 
@@ -147,6 +124,7 @@ class EmailIntakeRead(BaseModel):
     complaint_id: Optional[int]
     created_at: datetime
 
+    # Pre-complaint escalation state
     escalation_stage: Optional[str] = None
     escalation_count: int = 0
     escalation_sent_at: Optional[datetime] = None
@@ -169,6 +147,7 @@ class EmailIntakeListItem(BaseModel):
     complaint_id: Optional[int]
     created_at: datetime
 
+    # Pre-complaint escalation state (for the review list badges)
     escalation_stage: Optional[str] = None
     escalation_count: int = 0
     escalation_sent_at: Optional[datetime] = None
