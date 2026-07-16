@@ -43,6 +43,7 @@ ALLOWED_EXTENSIONS = {
     ".xls",
     ".xlsx",
     ".csv",
+    ".xlsm",  # Excel macro-enabled
 }
 
 MIME_TYPES: dict[str, str] = {
@@ -55,6 +56,7 @@ MIME_TYPES: dict[str, str] = {
     ".xls": "application/vnd.ms-excel",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".csv": "text/csv",
+    ".xlsm": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
 
