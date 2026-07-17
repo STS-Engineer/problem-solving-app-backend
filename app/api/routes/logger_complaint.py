@@ -31,6 +31,9 @@ from app.schemas.complaint_logger import (
     EscalationActionRequest,
     EscalationLevelTrack,
     EscalationTrackResponse,
+    EscalationActionItem,
+    EscalationActionsResponse,
+    ESCALATION_ACTION_LABELS,
 )
 from app.services.audit_service import log_escalation_action
 
@@ -196,6 +199,87 @@ async def list_complaints_for_logger(
         page_size=page_size,
         pages=(total + page_size - 1) // page_size,
     )
+
+
+# ─── GET /escalation-actions ──────────────────────────────────────────────────
+
+
+@router.get("/escalation-actions", response_model=EscalationActionsResponse)
+async def list_escalation_actions(
+    responsible: str | None = Query(
+        None, description="Filter by the responder's email (case-insensitive contains)"
+    ),
+    resolved: bool | None = Query(
+        None, description="Filter by whether the action marked the escalation resolved"
+    ),
+    search: str | None = Query(
+        None, description="Matches complaint reference, name or customer"
+    ),
+    db: AsyncSession = Depends(get_async_db),
+) -> EscalationActionsResponse:
+    """
+    Every recorded escalation action across all complaints, flattened with its
+    complaint context and ordered newest-first.
+
+    Powers the "By Responsible" view so a manager can see all escalation
+    actions a person has taken without opening each complaint one by one.
+    """
+    q = (
+        select(ComplaintAuditLog, Complaint)
+        .join(Complaint, ComplaintAuditLog.complaint_id == Complaint.id)
+        .where(ComplaintAuditLog.event_type == "escalation_action")
+        .order_by(ComplaintAuditLog.created_at.desc())
+    )
+
+    if responsible:
+        q = q.where(ComplaintAuditLog.performed_by_email.ilike(f"%{responsible}%"))
+    if search:
+        like = f"%{search}%"
+        q = q.where(
+            Complaint.reference_number.ilike(like)
+            | Complaint.complaint_name.ilike(like)
+            | Complaint.customer.ilike(like)
+        )
+
+    result = await db.execute(q)
+    rows = result.all()
+
+    items: list[EscalationActionItem] = []
+    for log, complaint in rows:
+        data = log.event_data or {}
+        is_resolved = bool(data.get("resolved"))
+        if resolved is not None and is_resolved != resolved:
+            continue
+        action_type = data.get("action_type")
+        level = data.get("level")
+        items.append(
+            EscalationActionItem(
+                log_id=log.id,
+                complaint_id=complaint.id,
+                reference_number=complaint.reference_number,
+                complaint_name=complaint.complaint_name,
+                customer=complaint.customer or "",
+                plant=complaint.avocarbon_plant or "",
+                priority=complaint.priority,
+                complaint_status=complaint.status,
+                step_code=log.step_code,
+                level=level if isinstance(level, int) else None,
+                action_type=action_type,
+                action_label=(
+                    ESCALATION_ACTION_LABELS.get(action_type, action_type)
+                    if action_type
+                    else None
+                ),
+                note=data.get("note"),
+                resolved=is_resolved,
+                attachment_url=data.get("attachment_url"),
+                attachment_name=data.get("attachment_name"),
+                performed_by_email=log.performed_by_email,
+                created_at=log.created_at,
+            )
+        )
+
+    return EscalationActionsResponse(items=items, total=len(items))
 
 
 # ─── GET /{complaint_id}/logs ─────────────────────────────────────────────────

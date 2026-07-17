@@ -173,3 +173,39 @@ class EscalationTrackResponse(BaseModel):
     reference_number: str
     complaint_name: str
     levels: list[EscalationLevelTrack]
+
+
+# ─── Escalation actions across all complaints (per-responsible view) ───────────
+
+
+class EscalationActionItem(BaseModel):
+    """
+    One recorded escalation action, flattened with its complaint context so it
+    can be listed and grouped by responder without opening each complaint.
+    """
+
+    log_id: int
+    complaint_id: int
+    reference_number: str
+    complaint_name: str
+    customer: str
+    plant: str
+    priority: str | None
+    complaint_status: str
+    step_code: str | None
+    level: int | None
+    action_type: str | None
+    action_label: str | None
+    note: str | None
+    resolved: bool
+    attachment_url: str | None
+    attachment_name: str | None
+    performed_by_email: str | None
+    created_at: datetime
+
+
+class EscalationActionsResponse(BaseModel):
+    """Flat list of every recorded escalation action, newest first."""
+
+    items: list[EscalationActionItem]
+    total: int
