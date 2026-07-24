@@ -46,11 +46,26 @@ _STEP_SLA_DAYS: dict[str, int] = {
 }
 
 
-def _due_date_for_step(step_code: str, created_at: datetime) -> datetime | None:
+def _due_date_for_step(step_code: str, sla_anchor: datetime) -> datetime | None:
+    """Step SLA deadline = sla_anchor + SLA days.
+
+    The anchor is the complaint's OPENING date (when the 8D work starts), NOT
+    the DB insert timestamp — so imported/back-dated complaints get deadlines
+    relative to when they were really opened.
+    """
     days = _STEP_SLA_DAYS.get(step_code)
     if days is None:
         return None
-    return created_at + timedelta(days=days)
+    return sla_anchor + timedelta(days=days)
+
+
+def _sla_anchor_for(complaint: Complaint, fallback: datetime) -> datetime:
+    """UTC datetime to anchor SLA deadlines on: the complaint_opening_date at
+    UTC midnight, falling back to `fallback` (creation time) if unset."""
+    opening = getattr(complaint, "complaint_opening_date", None)
+    if opening is None:
+        return fallback
+    return datetime(opening.year, opening.month, opening.day, tzinfo=timezone.utc)
 
 
 PRIORITY_MAPPING = {
@@ -59,6 +74,11 @@ PRIORITY_MAPPING = {
     "WR": "medium",
     "Quality Alert": "low",
 }
+
+# Terminal statuses — a complaint in any of these is NOT open and can never
+# be "overdue" (cancelled is a separate withdrawal outcome, closed/resolved/
+# rejected are genuine closures).
+_TERMINAL_STATUSES = {"closed", "resolved", "rejected", "cancelled"}
 
 _STEP_ORDER = ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]
 
@@ -121,8 +141,10 @@ class ComplaintService:
         # Auto-resolve QM / PM from the plant instead of manual entry.
         ComplaintService._resolve_plant_managers(db, complaint)
         created_at = datetime.now(timezone.utc)
+        # SLA clock starts at the opening date (8D start), not DB insert time.
+        sla_anchor = _sla_anchor_for(complaint, created_at)
         if not complaint.due_date:
-            complaint.due_date = created_at + timedelta(days=30)
+            complaint.due_date = sla_anchor + timedelta(days=30)
         db.add(complaint)
         db.flush()
 
@@ -144,7 +166,7 @@ class ComplaintService:
 
         for step_def in steps_definitions:
             step_code: str = step_def["code"]
-            due_date = _due_date_for_step(step_code, created_at)
+            due_date = _due_date_for_step(step_code, sla_anchor)
             step = ReportStep(
                 report_id=report.id,
                 step_code=step_code,
@@ -288,9 +310,10 @@ class ComplaintService:
 
             # ── is_overdue (computed, never stored on complaint) ───────────────
             # True when the current active step has passed its due_date.
-            # Closed complaints are never overdue.
+            # Only genuinely open complaints can be overdue — closed/resolved/
+            # rejected/cancelled are excluded.
             is_overdue = False
-            if complaint.status != "closed" and first_open_due_val is not None:
+            if complaint.status not in _TERMINAL_STATUSES and first_open_due_val is not None:
                 due = first_open_due_val
                 if due.tzinfo is None:
                     due = due.replace(tzinfo=timezone.utc)
@@ -395,8 +418,11 @@ class ComplaintService:
                 # New or updated complaints
                 Complaint.created_at >= since,
                 Complaint.updated_at >= since,
-                # Overdue open complaints
-                and_(Complaint.status != "closed", Complaint.due_date < now),
+                # Overdue open complaints (exclude terminal statuses)
+                and_(
+                    Complaint.status.notin_(_TERMINAL_STATUSES),
+                    Complaint.due_date < now,
+                ),
                 # Failed webhooks
                 Complaint.webhook_sent == False,
             )

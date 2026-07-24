@@ -50,8 +50,7 @@ STAGE_AWAITING_COMPLAINT = "awaiting_complaint"
 _MAX_LEVEL = 3
 
 # Final escalation recipient for stage 1 (COO). Overridable via env.
-# _ESCALATION_FINAL_EMAIL = os.getenv("COO_EMAIL", "roberto.gonzalez@avocarbon.com")
-_ESCALATION_FINAL_EMAIL = os.getenv("COO_EMAIL", "hayfa.rajhi@avocarbon.com")
+_ESCALATION_FINAL_EMAIL = os.getenv("COO_EMAIL", "roberto.gonzalez@avocarbon.com")
 
 
 # ── Thresholds (PROVISIONAL) ────────────────────────────────────────────────

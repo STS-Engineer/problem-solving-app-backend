@@ -1,5 +1,5 @@
 # app/services/dashboard_service.py
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Dict, List, Any, Optional
 from sqlalchemy import func, case, extract, and_, or_
 from sqlalchemy.orm import Session
@@ -30,14 +30,39 @@ MONTHLY_TARGETS_2026: Dict[str, int] = {
     "TIANJIN": 1,
     "DAEGU": 1,
     "ANHUI": 1,
-    "Kunshan": 1,
+    "KUNSHAN": 1,  # must match PlantEnum.KUNSHAN value exactly
     "SAME": 0,
     "POITIERS": 0,
     "CYCLAM": 0,
 }
 
-OPEN_STATUSES = {"open", "in_progress", "under_review"}
+# 8D step codes (D1–D8) represent a complaint still being worked through the
+# 8D methodology → treated as "open / in progress".
+_8D_STEP_STATUSES = {"D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"}
+OPEN_STATUSES = {"open", "in_progress", "under_review"} | _8D_STEP_STATUSES
 CLOSED_STATUSES = {"resolved", "closed", "rejected"}
+# NOTE: "cancelled" is intentionally in neither set — it is a separate outcome
+# (the complaint was withdrawn, not resolved) and is excluded from open/closed KPIs.
+
+
+def _step_overdue_condition(now: datetime):
+    """A ReportStep is overdue when its SLA deadline has passed without completion.
+
+    NOTE: we do NOT trust the stored ReportStep.is_overdue flag alone. The code
+    that used to set it was intentionally removed from escalation_service
+    (_process_step), so in practice the column is always False. We compute
+    overdue live from due_date, and still honour the flag if it is ever set
+    again.
+    """
+    return or_(
+        ReportStep.is_overdue.is_(True),
+        and_(
+            ReportStep.due_date.isnot(None),
+            ReportStep.due_date < now,
+            ReportStep.completed_at.is_(None),
+            ReportStep.status != "fulfilled",
+        ),
+    )
 
 
 class DashboardService:
@@ -144,6 +169,9 @@ class DashboardService:
                 db, base_filter
             ),
             "overdue_steps": DashboardService._get_overdue_steps(
+                db, year, start_date, end_date
+            ),
+            "overdue_vs_toclose_by_plant": DashboardService._get_overdue_vs_toclose_by_plant(
                 db, year, start_date, end_date
             ),
             "cqt_lateness": DashboardService._get_cqt_lateness(db, base_filter),
@@ -307,22 +335,61 @@ class DashboardService:
             data.append(entry)
         return data
 
+    # Number of D-steps that constitute a complete 8D.
+    _STEPS_TO_COMPLETE = 8
+
+    @staticmethod
+    def _fulfilled_count_subq(db: Session):
+        """Correlated-free subquery: fulfilled step count per complaint_id.
+
+        A complaint is CLOSED only when all 8D steps are fulfilled (business
+        rule), so downstream code compares this against _STEPS_TO_COMPLETE.
+        """
+        return (
+            db.query(
+                Report.complaint_id.label("cid"),
+                func.count(ReportStep.id)
+                .filter(ReportStep.status == "fulfilled")
+                .label("fulfilled"),
+            )
+            .join(ReportStep, ReportStep.report_id == Report.id)
+            .group_by(Report.complaint_id)
+            .subquery()
+        )
+
     @staticmethod
     def _get_total_by_plant(db: Session, base_filter) -> List[Dict]:
-        results = (
+        # Per plant: total, plus open vs closed where CLOSED = all 8D steps
+        # fulfilled (not the status field). Cancelled is excluded from open/closed.
+        fc = DashboardService._fulfilled_count_subq(db)
+        rows = (
             db.query(
                 Complaint.avocarbon_plant.label("plant"),
-                func.count(Complaint.id).label("count"),
+                Complaint.status.label("status"),
+                func.coalesce(fc.c.fulfilled, 0).label("fulfilled"),
             )
+            .outerjoin(fc, fc.c.cid == Complaint.id)
             .filter(base_filter)
-            .group_by(Complaint.avocarbon_plant)
-            .order_by(func.count(Complaint.id).asc())
             .all()
         )
-        return [
-            {"plant": r.plant.value if r.plant is not None else None, "count": r.count}
-            for r in results
-        ]
+
+        agg: Dict[Any, Dict[str, Any]] = {}
+        for r in rows:
+            key = r.plant.value if r.plant is not None else None
+            d = agg.setdefault(
+                key, {"plant": key, "count": 0, "open": 0, "closed": 0}
+            )
+            d["count"] += 1
+            if r.status == "cancelled":
+                continue
+            if r.fulfilled == DashboardService._STEPS_TO_COMPLETE:
+                d["closed"] += 1
+            else:
+                d["open"] += 1
+
+        result = list(agg.values())
+        result.sort(key=lambda x: x["count"])
+        return result
 
     @staticmethod
     def _get_claims_by_plant_customer(db: Session, base_filter) -> List[Dict]:
@@ -429,6 +496,9 @@ class DashboardService:
             for r in results:
                 if r.month == m and r.status:
                     k = r.status.replace("-", "_")
+                    # 8D step codes (D1–D8) are in-progress complaints
+                    if r.status in _8D_STEP_STATUSES:
+                        k = "in_progress"
                     if k in entry:
                         entry[k] += r.count
             data.append(entry)
@@ -721,51 +791,45 @@ class DashboardService:
             "Nov",
             "Dec",
         ]
-        plants = [p.value for p in PlantEnum]
         yf = DashboardService._year_filter(year, start_date, end_date)
 
+        # CLOSED = all 8D steps fulfilled (business rule), NOT the status field.
+        # Cancelled complaints are excluded from both open and closed.
+        fc = DashboardService._fulfilled_count_subq(db)
         results = (
             db.query(
                 extract("month", Complaint.complaint_opening_date).label("month"),
-                Complaint.avocarbon_plant,
-                Complaint.status,
-                func.count(Complaint.id).label("count"),
+                Complaint.avocarbon_plant.label("plant"),
+                Complaint.status.label("status"),
+                func.coalesce(fc.c.fulfilled, 0).label("fulfilled"),
             )
+            .outerjoin(fc, fc.c.cid == Complaint.id)
             .filter(yf)
-            .group_by(
-                extract("month", Complaint.complaint_opening_date),
-                Complaint.avocarbon_plant,
-                Complaint.status,
-            )
             .all()
         )
 
+        agg: Dict[tuple, Dict[str, int]] = {}
+        for r in results:
+            if r.status == "cancelled" or r.plant is None or r.month is None:
+                continue
+            key = (int(r.month), r.plant.value)
+            bucket = agg.setdefault(key, {"open": 0, "closed": 0})
+            if r.fulfilled == DashboardService._STEPS_TO_COMPLETE:
+                bucket["closed"] += 1
+            else:
+                bucket["open"] += 1
+
         rows = []
-        for m in range(1, 13):
-            for plant in plants:
-                open_cnt = sum(
-                    r.count
-                    for r in results
-                    if int(r.month) == m
-                    and r.avocarbon_plant == plant
-                    and r.status in OPEN_STATUSES
+        for (m, plant), v in agg.items():
+            if v["open"] or v["closed"]:
+                rows.append(
+                    {
+                        "month": months[m - 1],
+                        "plant": plant,
+                        "open": v["open"],
+                        "closed": v["closed"],
+                    }
                 )
-                closed_cnt = sum(
-                    r.count
-                    for r in results
-                    if int(r.month) == m
-                    and r.avocarbon_plant == plant
-                    and r.status in CLOSED_STATUSES
-                )
-                if open_cnt or closed_cnt:
-                    rows.append(
-                        {
-                            "month": months[m - 1],
-                            "plant": plant,
-                            "open": open_cnt,
-                            "closed": closed_cnt,
-                        }
-                    )
         return rows
 
     @staticmethod
@@ -878,34 +942,68 @@ class DashboardService:
 
     @staticmethod
     def _get_overdue_complaints(db: Session, base_filter) -> Dict[str, Any]:
+        """A complaint is OVERDUE when its current 8D step is already overdue.
+
+        Definition (per business rule): an open complaint is overdue if any of
+        its non-fulfilled steps has passed its SLA deadline. Because step SLA
+        due dates increase with step order, the earliest non-fulfilled step (the
+        "current" step) is the one that trips this first.
+
+        Fallback: complaints that have no report/steps with due dates are judged
+        on the complaint-level due_date instead, so nothing slips through.
+        """
         now = datetime.utcnow()
-        overdue_q = (
-            db.query(
-                Complaint.avocarbon_plant,
-                func.count(Complaint.id).label("count"),
-            )
+
+        # 1) Open complaints whose current step is overdue (step-based rule)
+        step_overdue_rows = (
+            db.query(Complaint.id, Complaint.avocarbon_plant)
+            .join(Report, Report.complaint_id == Complaint.id)
+            .join(ReportStep, ReportStep.report_id == Report.id)
             .filter(
                 base_filter,
-                Complaint.due_date < now,
-                Complaint.status.notin_(["closed", "resolved", "rejected"]),
-                Complaint.due_date.isnot(None),
+                Complaint.status.in_(list(OPEN_STATUSES)),
+                _step_overdue_condition(now),
             )
-            .group_by(Complaint.avocarbon_plant)
+            .distinct()
             .all()
         )
 
-        total_overdue = sum(r.count for r in overdue_q)
-        by_plant = [
-            {
-                "plant": (
-                    r.avocarbon_plant.value
-                    if r.avocarbon_plant is not None
-                    else "UNKNOWN"
+        # 2) Fallback for open complaints without step-level due dates:
+        #    use the complaint-level due_date.
+        complaint_overdue_rows = (
+            db.query(Complaint.id, Complaint.avocarbon_plant)
+            .outerjoin(Report, Report.complaint_id == Complaint.id)
+            .outerjoin(
+                ReportStep,
+                and_(
+                    ReportStep.report_id == Report.id,
+                    ReportStep.due_date.isnot(None),
                 ),
-                "count": r.count,
-            }
-            for r in overdue_q
-        ]
+            )
+            .filter(
+                base_filter,
+                Complaint.status.in_(list(OPEN_STATUSES)),
+                Complaint.due_date.isnot(None),
+                Complaint.due_date < now,
+                ReportStep.id.is_(None),  # only complaints with no step due dates
+            )
+            .distinct()
+            .all()
+        )
+
+        # Union by complaint id → avoid double counting
+        overdue_plants: Dict[int, Any] = {}
+        for cid, plant in step_overdue_rows:
+            overdue_plants[cid] = plant
+        for cid, plant in complaint_overdue_rows:
+            overdue_plants.setdefault(cid, plant)
+
+        total_overdue = len(overdue_plants)
+        plant_counts: Dict[str, int] = {}
+        for plant in overdue_plants.values():
+            key = plant.value if plant is not None else "UNKNOWN"
+            plant_counts[key] = plant_counts.get(key, 0) + 1
+        by_plant = [{"plant": k, "count": v} for k, v in plant_counts.items()]
 
         # Also count complaints with no due date (risk indicator)
         no_due = (
@@ -913,7 +1011,7 @@ class DashboardService:
             .filter(
                 base_filter,
                 Complaint.due_date.is_(None),
-                Complaint.status.notin_(["closed", "resolved", "rejected"]),
+                Complaint.status.in_(list(OPEN_STATUSES)),  # only genuinely open (excludes closed/resolved/rejected/cancelled)
             )
             .scalar()
             or 0
@@ -940,8 +1038,8 @@ class DashboardService:
             .join(Complaint, Report.complaint_id == Complaint.id)
             .filter(
                 yf,
-                ReportStep.is_overdue == True,
-                ReportStep.status != "fulfilled",
+                Complaint.status.in_(list(OPEN_STATUSES)),
+                _step_overdue_condition(now),
             )
             .group_by(ReportStep.step_code, Complaint.avocarbon_plant)
             .all()
@@ -959,6 +1057,54 @@ class DashboardService:
             }
             for r in results
         ]
+
+    @staticmethod
+    def _get_overdue_vs_toclose_by_plant(
+        db: Session,
+        year: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> List[Dict]:
+        """Per plant, for open complaints in the period:
+          - to_close: number of 8D steps still not fulfilled (remaining work)
+          - overdue:  the subset of those whose SLA deadline has passed
+
+        overdue is a subset of to_close, so the chart reads "of the steps still
+        to close, how many are already overdue". Respects the year/month/quarter
+        filter, giving the per-month / per-year views.
+        """
+        now = datetime.utcnow()
+        yf = DashboardService._year_filter(year, start_date, end_date)
+
+        base = (
+            db.query(
+                Complaint.avocarbon_plant.label("plant"),
+                func.count(ReportStep.id).label("to_close"),
+                func.count(ReportStep.id)
+                .filter(_step_overdue_condition(now))
+                .label("overdue"),
+            )
+            .join(Report, Report.complaint_id == Complaint.id)
+            .join(ReportStep, ReportStep.report_id == Report.id)
+            .filter(
+                yf,
+                Complaint.status.in_(list(OPEN_STATUSES)),
+                ReportStep.status != "fulfilled",
+            )
+            .group_by(Complaint.avocarbon_plant)
+            .all()
+        )
+
+        rows = [
+            {
+                "plant": r.plant.value if r.plant is not None else "UNKNOWN",
+                "to_close": r.to_close,
+                "overdue": r.overdue,
+            }
+            for r in base
+        ]
+        rows.sort(key=lambda x: x["overdue"], reverse=True)
+        return rows
 
     @staticmethod
     def _get_monthly_vs_target(
@@ -984,42 +1130,51 @@ class DashboardService:
         ]
         yf = DashboardService._year_filter(year, start_date, end_date)
 
-        results = (
-            db.query(
-                extract("month", Complaint.complaint_opening_date).label("month"),
-                Complaint.avocarbon_plant,
-                func.count(Complaint.id).label("count"),
+        def _monthly_counts(year_filter):
+            return (
+                db.query(
+                    extract("month", Complaint.complaint_opening_date).label("month"),
+                    Complaint.avocarbon_plant,
+                    func.count(Complaint.id).label("count"),
+                )
+                .filter(year_filter)
+                .group_by(
+                    extract("month", Complaint.complaint_opening_date),
+                    Complaint.avocarbon_plant,
+                )
+                .all()
             )
-            .filter(yf)
-            .group_by(
-                extract("month", Complaint.complaint_opening_date),
-                Complaint.avocarbon_plant,
-            )
-            .all()
+
+        results = _monthly_counts(yf)
+        # Target = continuous-improvement goal: 15% fewer than the SAME month of
+        # the previous year (target = prev-year actual × 0.85).
+        prev_results = _monthly_counts(
+            extract("year", Complaint.complaint_opening_date) == year - 1
         )
+
+        def _count_for(rows_, m, plant):
+            return next(
+                (r.count for r in rows_ if int(r.month) == m and r.avocarbon_plant == plant),
+                0,
+            )
 
         rows = []
         for m in range(1, 13):
             for plant in plants:
-                actual = next(
-                    (
-                        r.count
-                        for r in results
-                        if int(r.month) == m and r.avocarbon_plant == plant
-                    ),
-                    0,
-                )
-                target = MONTHLY_TARGETS_2026.get(plant, 0)
+                actual = _count_for(results, m, plant)
+                prev_actual = _count_for(prev_results, m, plant)
+                target = round(prev_actual * 0.85, 1)
                 rows.append(
                     {
                         "month": months[m - 1],
                         "plant": plant,
                         "actual": actual,
                         "target": target,
-                        "delta": actual - target,
-                        # on_target: plants with target=0 should flag ANY complaint
-                        "on_target": actual <= target if target > 0 else actual == 0,
-                        "zero_target_breach": target == 0 and actual > 0,
+                        "prev_year_actual": prev_actual,
+                        "delta": round(actual - target, 1),
+                        # No prior-year baseline → any complaint is above target.
+                        "on_target": actual <= target if prev_actual > 0 else actual == 0,
+                        "zero_target_breach": prev_actual == 0 and actual > 0,
                     }
                 )
         return rows
@@ -1120,16 +1275,16 @@ class DashboardService:
     @staticmethod
     def _get_cqt_lateness(db: Session, base_filter) -> Dict[str, Any]:
         now = datetime.utcnow()
-        overdue_condition = or_(
-            ReportStep.is_overdue == True,
-            and_(ReportStep.due_date < now, ReportStep.completed_at.is_(None)),
-        )
+        # Use the canonical step-overdue condition, and only count genuinely
+        # open complaints — a closed/cancelled complaint is not a "late filing".
+        overdue_condition = _step_overdue_condition(now)
+        open_filter = Complaint.status.in_(list(OPEN_STATUSES))
 
         late_complaints_sq = (
             db.query(Complaint.id)
             .join(Report, Report.complaint_id == Complaint.id)
             .join(ReportStep, ReportStep.report_id == Report.id)
-            .filter(base_filter, overdue_condition)
+            .filter(base_filter, open_filter, overdue_condition)
             .distinct()
             .subquery()
         )
@@ -1146,7 +1301,7 @@ class DashboardService:
             )
             .join(Report, Report.complaint_id == Complaint.id)
             .join(ReportStep, ReportStep.report_id == Report.id)
-            .filter(base_filter, overdue_condition)
+            .filter(base_filter, open_filter, overdue_condition)
             .group_by(Complaint.cqt_email)
             .order_by(func.count(func.distinct(Complaint.id)).desc())
             .all()
@@ -1159,7 +1314,7 @@ class DashboardService:
             )
             .join(Report, Report.complaint_id == Complaint.id)
             .join(ReportStep, ReportStep.report_id == Report.id)
-            .filter(base_filter, overdue_condition)
+            .filter(base_filter, open_filter, overdue_condition)
             .group_by(Complaint.avocarbon_plant)
             .order_by(func.count(func.distinct(Complaint.id)).desc())
             .all()
@@ -1172,7 +1327,7 @@ class DashboardService:
             )
             .join(Report, ReportStep.report_id == Report.id)
             .join(Complaint, Report.complaint_id == Complaint.id)
-            .filter(base_filter, overdue_condition)
+            .filter(base_filter, open_filter, overdue_condition)
             .group_by(ReportStep.step_code)
             .order_by(ReportStep.step_code)
             .all()
@@ -1277,24 +1432,35 @@ class DashboardService:
         pct_1d = round(sum(1 for _, d in delays if d <= 1) / total * 100, 1)
         pct_2d = round(sum(1 for _, d in delays if d <= 2) / total * 100, 1)
 
-        # By plant
-        plant_agg: Dict[str, List[float]] = {}
+        # By plant — overall plus CS1/CS2 breakdown
+        def _mean(vals):
+            return round(sum(vals) / len(vals), 2) if vals else None
+
+        plant_agg: Dict[str, Dict[str, List[float]]] = {}
         for r, d in delays:
             p = r.avocarbon_plant or "UNKNOWN"
-            plant_agg.setdefault(p, []).append(d)
+            e = plant_agg.setdefault(p, {"all": [], "CS1": [], "CS2": []})
+            e["all"].append(d)
+            cs = (r.quality_issue_warranty or "").upper()
+            if "CS1" in cs:
+                e["CS1"].append(d)
+            elif "CS2" in cs:
+                e["CS2"].append(d)
 
         by_plant = [
             {
                 "plant": p,
-                "avg_days": round(sum(vals) / len(vals), 2),
-                "count": len(vals),
+                "avg_days": _mean(e["all"]),
+                "count": len(e["all"]),
+                "avg_days_cs1": _mean(e["CS1"]),
+                "avg_days_cs2": _mean(e["CS2"]),
                 "pct_on_time": round(
-                    sum(1 for v in vals if v <= 2) / len(vals) * 100, 1
+                    sum(1 for v in e["all"] if v <= 2) / len(e["all"]) * 100, 1
                 ),
             }
-            for p, vals in plant_agg.items()
+            for p, e in plant_agg.items()
         ]
-        by_plant.sort(key=lambda x: x["avg_days"], reverse=True)
+        by_plant.sort(key=lambda x: x["avg_days"] or 0, reverse=True)
 
         # By month (CS1 vs CS2 avg delay)
         months = [
@@ -1311,11 +1477,15 @@ class DashboardService:
             "Nov",
             "Dec",
         ]
+        # Per month: overall (ALL warranty types) plus CS1 / CS2 lines. The
+        # "ALL" series ensures months whose complaints are WR / Quality Alert
+        # (not CS1/CS2) still appear on the chart.
         month_agg: Dict[int, Dict[str, List[float]]] = {
-            m: {"CS1": [], "CS2": []} for m in range(1, 13)
+            m: {"ALL": [], "CS1": [], "CS2": []} for m in range(1, 13)
         }
         for r, d in delays:
             m = int(r.month)
+            month_agg[m]["ALL"].append(d)
             cs = (r.quality_issue_warranty or "").upper()
             if "CS1" in cs:
                 month_agg[m]["CS1"].append(d)
@@ -1325,16 +1495,9 @@ class DashboardService:
         by_month = [
             {
                 "month": months[m - 1],
-                "avg_days_cs1": (
-                    round(sum(month_agg[m]["CS1"]) / len(month_agg[m]["CS1"]), 2)
-                    if month_agg[m]["CS1"]
-                    else None
-                ),
-                "avg_days_cs2": (
-                    round(sum(month_agg[m]["CS2"]) / len(month_agg[m]["CS2"]), 2)
-                    if month_agg[m]["CS2"]
-                    else None
-                ),
+                "avg_days_overall": _mean(month_agg[m]["ALL"]),
+                "avg_days_cs1": _mean(month_agg[m]["CS1"]),
+                "avg_days_cs2": _mean(month_agg[m]["CS2"]),
             }
             for m in range(1, 13)
         ]
@@ -1397,7 +1560,7 @@ class DashboardService:
                 base_filter,
                 Complaint.closed_at.isnot(None),
                 Complaint.complaint_opening_date.isnot(None),
-                Complaint.status.in_(["closed", "resolved"]),
+                Complaint.status.in_(list(CLOSED_STATUSES)),  # closed/resolved/rejected are all genuine closures
             )
             .all()
         )
@@ -1557,10 +1720,8 @@ class DashboardService:
                 if cycle <= 30:
                     closed_on_time += 1
                     plant_agg[p]["close_ok"] += 1
-            elif (
-                r.status not in ("closed", "resolved", "rejected")
-                and r.complaint_opening_date
-            ):
+            elif r.status in OPEN_STATUSES and r.complaint_opening_date:
+                # genuinely open (excludes cancelled) — count if aged past 30d SLA
                 age = (now - r.complaint_opening_date).days
                 if age > 30:
                     open_past_30 += 1
@@ -1669,17 +1830,17 @@ class DashboardService:
         For each D-step, across all complaints in the filter window:
           - total instances of this step
           - completed on time (completed_at ≤ due_date)
-          - overdue (is_overdue or completed late)
+          - overdue (past due_date, or completed late)
           - still open
 
         Returns: [{ step, sla_days, total, on_time, overdue, open, compliance_pct }]
         """
+        now = datetime.now(timezone.utc)
         results = (
             db.query(
                 ReportStep.step_code,
                 Complaint.avocarbon_plant,
                 ReportStep.status,
-                ReportStep.is_overdue,
                 ReportStep.due_date,
                 ReportStep.completed_at,
             )
@@ -1709,10 +1870,15 @@ class DashboardService:
                         step_agg[sc]["overdue"] += 1
                 else:
                     step_agg[sc]["on_time"] += 1  # no due date set, count as ok
-            elif r.is_overdue:
-                step_agg[sc]["overdue"] += 1
             else:
-                step_agg[sc]["open"] += 1
+                # Not completed — compute overdue live from due_date
+                due = r.due_date
+                if due is not None and due.tzinfo is None:
+                    due = due.replace(tzinfo=timezone.utc)
+                if due is not None and due < now:
+                    step_agg[sc]["overdue"] += 1
+                else:
+                    step_agg[sc]["open"] += 1
 
         return [
             {
@@ -1975,7 +2141,7 @@ class DashboardService:
             .filter(
                 base_filter,
                 Complaint.due_date.is_(None),
-                Complaint.status.notin_(["closed", "resolved", "rejected"]),
+                Complaint.status.in_(list(OPEN_STATUSES)),  # only genuinely open (excludes closed/resolved/rejected/cancelled)
             )
             .scalar()
             or 0
@@ -1989,7 +2155,7 @@ class DashboardService:
             .filter(
                 base_filter,
                 Complaint.due_date.is_(None),
-                Complaint.status.notin_(["closed", "resolved", "rejected"]),
+                Complaint.status.in_(list(OPEN_STATUSES)),  # only genuinely open (excludes closed/resolved/rejected/cancelled)
             )
             .group_by(Complaint.avocarbon_plant)
             .all()
@@ -2126,7 +2292,9 @@ class DashboardService:
     @staticmethod
     def _get_priority_distribution(db: Session, base_filter) -> List[Dict]:
         """
-        The priority field (low/normal/high/urgent) was never surfaced.
+        The priority field was never surfaced. Values are assigned in
+        ComplaintService.PRIORITY_MAPPING as critical/high/medium/low
+        (CS2→critical, CS1→high, WR→medium, Quality Alert→low).
         Returns [{ priority, count, open, closed }].
         """
         results = (
@@ -2140,18 +2308,21 @@ class DashboardService:
             .all()
         )
 
-        PRIORITIES = ["urgent", "high", "normal", "low"]
+        PRIORITIES = ["critical", "high", "medium", "low"]
         agg: Dict[str, Dict[str, int]] = {
             p: {"open": 0, "closed": 0, "total": 0} for p in PRIORITIES
         }
         for r in results:
-            pri = r.priority or "normal"
+            pri = r.priority or "low"
             if pri not in agg:
                 agg[pri] = {"open": 0, "closed": 0, "total": 0}
             if r.status in OPEN_STATUSES:
                 agg[pri]["open"] += r.count
-            else:
+            elif r.status in CLOSED_STATUSES:
                 agg[pri]["closed"] += r.count
+            else:
+                # e.g. "cancelled" — separate outcome, not open nor closed
+                continue
             agg[pri]["total"] += r.count
 
         return [{"priority": p, **v} for p, v in agg.items() if v["total"] > 0]

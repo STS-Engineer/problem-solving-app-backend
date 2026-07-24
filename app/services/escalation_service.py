@@ -322,7 +322,36 @@ def _process_step(db: Session, step: ReportStep) -> bool:
         # ← FIX: removed step.is_overdue = True (column doesn't exist)
         # ← FIX: removed step.status = "overdue" (not a valid status)
 
-    step.escalation_sent_at = utc_now()
+    # NOTE: escalation_sent_at is set only on confirmed delivery (in
+    # _attempt_send / _retry_outbox_entry), never here — otherwise it would
+    # record sends that failed.
+
+    # ── Guard against duplicate escalations at the same level ──────────────
+    # escalation_count only advances on a SUCCESSFUL send, so after a failed
+    # send it stays put and the next scan would recompute the same level. The
+    # partial unique index only blocks duplicate *pending* rows, so a lingering
+    # 'failed' (retriable) row would otherwise let us insert a second entry and
+    # double-send. If such an entry already exists, leave it to the retry job.
+    existing = (
+        db.query(EmailOutbox)
+        .filter(
+            EmailOutbox.step_id == step.id,
+            EmailOutbox.escalation_level == level,
+            EmailOutbox.status.in_(["pending", "failed"]),
+        )
+        .first()
+    )
+    if existing is not None:
+        logger.info(
+            "Step %s (%s): L%s already queued (outbox_id=%s, status=%s) — "
+            "leaving it to the retry job, not re-sending",
+            step.id,
+            step.step_code,
+            level,
+            existing.id,
+            existing.status,
+        )
+        return False
 
     outbox_entry = EmailOutbox(
         step_id=step.id,
@@ -375,6 +404,7 @@ def _attempt_send(
         entry.sent_at = utc_now()
         entry.last_error = None
         step.escalation_count = level  # confirmed delivery only
+        step.escalation_sent_at = utc_now()  # only on confirmed delivery
 
         _log_event(
             db,
@@ -475,6 +505,7 @@ def _retry_outbox_entry(db: Session, entry: EmailOutbox) -> None:
         entry.sent_at = utc_now()
         entry.last_error = None
         step.escalation_count = entry.escalation_level
+        step.escalation_sent_at = utc_now()  # only on confirmed delivery
 
         logger.info(
             "✓ Retry OK (attempt %d) — outbox_id=%s step=%s | escalation_count → %d",

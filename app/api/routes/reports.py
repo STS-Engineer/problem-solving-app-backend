@@ -160,7 +160,18 @@ def _stream_excel(db: Session, report_id: int) -> StreamingResponse:
 
     report = db.query(Report).filter(Report.id == report_id).first()
 
-    # ── Auto-close complaint on first export ──────────────────────────────
+    # ── Business rule: the 8D Excel report can only be generated once the
+    #    final step (D8) is fulfilled. ─────────────────────────────────────
+    if report:
+        d8 = next((s for s in report.steps if s.step_code == "D8"), None)
+        if d8 is None or d8.status != "fulfilled":
+            raise HTTPException(
+                status_code=400,
+                detail="The 8D report can only be exported once step D8 is fulfilled.",
+            )
+
+    # ── Auto-close complaint on first export (D8 fulfilment normally already
+    #    closes it — this is a defensive safety net). ──────────────────────
     if report and report.complaint:
         complaint = report.complaint
         if (complaint.status or "").lower() not in ("closed", "resolved"):

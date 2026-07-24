@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import (
     APIRouter,
@@ -45,20 +46,39 @@ router = APIRouter()
 # ─── SLA table (calendar days → hours) ───────────────────────────────────────
 # Must stay in sync with complaint_service._STEP_SLA_DAYS
 
+# Must stay in sync with complaint_service._STEP_SLA_DAYS
+# (D1:1, D2:2, D3:3, D4:5, D5:10, D6:30, D7:30, D8:30 calendar days).
 _SLA_HOURS: dict[str, int] = {
-    "D1": 24,
-    "D2": 72,
-    "D3": 24,
-    "D4": 168,  # 7 days
-    "D5": 336,  # 14 days
+    "D1": 24,  # 1 day
+    "D2": 48,  # 2 days
+    "D3": 72,  # 3 days
+    "D4": 120,  # 5 days
+    "D5": 240,  # 10 days
     "D6": 720,  # 30 days
-    "D7": 1080,  # 45 days
-    "D8": 1440,  # 60 days
+    "D7": 720,  # 30 days
+    "D8": 720,  # 30 days
 }
 
 
 def _sla_hours(code: str) -> int:
     return _SLA_HOURS.get(code, 24)
+
+
+def _step_is_overdue(s: ReportStep) -> bool:
+    """Compute step-overdue live from due_date.
+
+    The stored ReportStep.is_overdue column is no longer written (the setter
+    was removed from escalation_service), so it is always False. A step is
+    overdue when it is not yet completed and its SLA deadline has passed.
+    """
+    if s.status in ("fulfilled", "validated"):
+        return False
+    if s.completed_at is not None or s.due_date is None:
+        return False
+    due = s.due_date
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    return due < datetime.now(timezone.utc)
 
 
 # ─── Serialisers ──────────────────────────────────────────────────────────────
@@ -76,7 +96,7 @@ def _build_step_summary(steps: list[ReportStep]) -> list[StepSummary]:
             escalation_count=s.escalation_count or 0,
             cost=None,
             hours_allowed=_sla_hours(s.step_code),
-            is_overdue=getattr(s, "is_overdue", False),
+            is_overdue=_step_is_overdue(s),
         )
         for s in sorted(steps, key=lambda x: x.step_code)
     ]
@@ -368,7 +388,7 @@ async def get_complaint_step_logs(
                     escalation_count=step.escalation_count or 0,
                     cost=None,
                     hours_allowed=_sla_hours(step.step_code),
-                    is_overdue=getattr(step, "is_overdue", False),
+                    is_overdue=_step_is_overdue(step),
                 ),
                 logs=[_serialize_log(lg) for lg in step_logs],
             )
