@@ -223,6 +223,13 @@ def _get_container_client():
     return container
 
 
+def get_container_client():
+    """Public accessor for the lazily-initialised container client — used by
+    other storage-adjacent services (e.g. file_storage.py) that need direct
+    blob access without duplicating the client/container bootstrap logic."""
+    return _get_container_client()
+
+
 # ── Filename / path helpers ───────────────────────────────────────────────────
 
 

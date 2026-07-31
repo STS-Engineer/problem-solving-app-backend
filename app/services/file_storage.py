@@ -1,8 +1,17 @@
 """
 app/services/file_storage.py
 
-Centralised file-storage backend using the GitHub Contents API.
-Files are stored as base64-encoded blobs inside the repository under:
+Centralised file-storage backend used by 8D evidence uploads (D2e/D6/D7 via
+step_files.py + conversation.py) and PDF report exports.
+
+New uploads go to Azure Blob Storage (see app/services/blob_storage.py,
+configured via AZURE_CONNECTION_STRING + AZURE_STORAGE_CONTAINER_NAME).
+
+Files uploaded before this migration live in the legacy GitHub-Contents-API
+backend and are still served/deleted from there. The two are told apart by
+`stored_path` shape: legacy GitHub entries are a bare leaf filename
+("<uuid>.ext"), Azure blob entries always include a folder prefix
+("evidence/8d/<uuid>.ext") — so no schema change/migration was needed.
 """
 
 from __future__ import annotations
@@ -18,6 +27,8 @@ from dotenv import load_dotenv
 load_dotenv()
 import httpx
 
+from app.services import blob_storage
+
 logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
@@ -28,6 +39,15 @@ _DEFAULT_REPO = "problem-solving-app-backend"
 _DEFAULT_BRANCH = "uploads"
 _DEFAULT_FOLDER = "uploads/8d"
 _DEFAULT_REPORTS_FOLDER = "exports/8d-reports"
+
+_BLOB_EVIDENCE_FOLDER = "evidence/8d"
+_BLOB_REPORTS_FOLDER = "reports/8d"
+
+
+def _is_blob_path(stored_name: str) -> bool:
+    """Azure blob names always carry a folder prefix; legacy GitHub leaf
+    filenames never do."""
+    return "/" in stored_name
 
 
 def _token() -> str:
@@ -90,37 +110,96 @@ def _require_env() -> None:
 
 class FileStorageService:
     """
-    Stores uploaded files directly inside a GitHub repository via the
-    Contents API (PUT /repos/{owner}/{repo}/contents/{path}).
+    New files: uploaded to Azure Blob Storage via the Azure SDK
+    (app/services/blob_storage.py's container client).
 
-    stored_path in DB = leaf filename only:
-        <uuid_hex><ext>   e.g. a3f0b1c2d3e4f5a6.jpg
+    Legacy files (uploaded before this migration): stored inside a GitHub
+    repository via the Contents API (PUT /repos/{owner}/{repo}/contents/{path}).
 
-    Full repo path:
-        {GITHUB_FOLDER}/{stored_name}
+    stored_path in DB:
+        Azure  = "<folder>/<uuid_hex><ext>"   e.g. evidence/8d/a3f0b1c2.jpg
+        GitHub = "<uuid_hex><ext>"            e.g. a3f0b1c2.jpg   (legacy)
     """
 
-    def _repo_path(self, stored_name: str) -> str:
-        return f"{_folder()}/{stored_name}"
+    # ── Azure blob backend (current) ───────────────────────────────────────
 
-    def url_for(self, stored_name: str) -> str:
-        """
-        Raw GitHub URL — only works for public repos.
-        For private repos use fetch_content() to proxy through the backend.
-        """
+    def _blob_path(self, stored_name: str, folder: str) -> str:
+        return f"{folder}/{stored_name}"
+
+    async def _blob_upload(self, content: bytes, original_name: str, mime_type: str, folder: str) -> dict[str, str]:
+        from azure.storage.blob import ContentSettings
+
+        ext = Path(original_name).suffix.lower()
+        stored_name = f"{uuid.uuid4().hex}{ext}"
+        blob_name = self._blob_path(stored_name, folder)
+
+        container = blob_storage.get_container_client()
+        blob_client = container.get_blob_client(blob_name)
+        blob_client.upload_blob(
+            content,
+            overwrite=True,
+            content_settings=ContentSettings(content_type=mime_type),
+        )
+        url = blob_storage.get_blob_url(blob_name)
+        logger.info("Uploaded %s -> %s", blob_name, url)
+        return {"stored_name": blob_name, "url": url}
+
+    async def _blob_upload_named(self, content: bytes, blob_name: str, mime_type: str) -> dict[str, str]:
+        """Upload with an exact, caller-chosen blob name (no uuid substitution)
+        — used for report exports, which are addressed by filename, not id."""
+        from azure.storage.blob import ContentSettings
+
+        container = blob_storage.get_container_client()
+        blob_client = container.get_blob_client(blob_name)
+        blob_client.upload_blob(
+            content,
+            overwrite=True,
+            content_settings=ContentSettings(content_type=mime_type),
+        )
+        url = blob_storage.get_blob_url(blob_name)
+        logger.info("Uploaded %s -> %s", blob_name, url)
+        return {"stored_name": blob_name, "url": url}
+
+    def _blob_url_for(self, blob_name: str) -> str:
+        return blob_storage.get_blob_url(blob_name)
+
+    async def _blob_fetch_content(self, blob_name: str) -> bytes:
+        container = blob_storage.get_container_client()
+        blob_client = container.get_blob_client(blob_name)
+        try:
+            return blob_client.download_blob().readall()
+        except Exception as exc:
+            if "BlobNotFound" in str(exc) or "404" in str(exc):
+                raise FileNotFoundError(f"File not found in blob storage: {blob_name}")
+            raise
+
+    async def _blob_delete(self, blob_name: str) -> None:
+        container = blob_storage.get_container_client()
+        blob_client = container.get_blob_client(blob_name)
+        try:
+            blob_client.delete_blob()
+            logger.info("Deleted %s from blob storage", blob_name)
+        except Exception as exc:
+            if "BlobNotFound" in str(exc) or "404" in str(exc):
+                logger.warning("delete: blob not found, skipping: %s", blob_name)
+                return
+            raise
+
+    # ── Legacy GitHub backend (old files only) ──────────────────────────────
+
+    def _github_repo_path(self, stored_name: str, folder: str) -> str:
+        return f"{folder}/{stored_name}"
+
+    def _github_url_for(self, stored_name: str) -> str:
         return (
             f"https://raw.githubusercontent.com"
             f"/{_owner()}/{_repo()}/{_branch()}/{_folder()}/{stored_name}"
         )
 
-    async def fetch_content(self, stored_name: str) -> bytes:
-        """
-        Download raw file bytes via the GitHub API (works for private repos).
-        Use this to proxy files to the browser instead of redirecting.
-        """
+    async def _github_fetch_content(self, stored_name: str) -> bytes:
         api_url = (
             f"{_GITHUB_API}/repos/{_owner()}/{_repo()}"
-            f"/contents/{self._repo_path(stored_name)}"
+            f"/contents/{self._github_repo_path(stored_name, _folder())}"
         )
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.get(
@@ -133,48 +212,8 @@ class FileStorageService:
             r.raise_for_status()
             return r.content
 
-    async def upload(
-        self,
-        content: bytes,
-        original_name: str,
-        mime_type: str,
-    ) -> dict[str, str]:
-        """
-        Upload bytes to GitHub and return:
-            {"stored_name": "uuid.jpg", "url": "https://raw.githubusercontent.com/..."}
-        """
-        _require_env()
-
-        ext = Path(original_name).suffix.lower()
-        stored_name = f"{uuid.uuid4().hex}{ext}"
-        repo_path = self._repo_path(stored_name)
-        encoded = base64.b64encode(content).decode()
-
-        api_url = f"{_GITHUB_API}/repos/{_owner()}/{_repo()}/contents/{repo_path}"
-
-        payload: dict[str, Any] = {
-            "message": f"chore: upload evidence file {stored_name}",
-            "content": encoded,
-            "branch": _branch(),
-        }
-
-        async with httpx.AsyncClient(headers=_headers(), timeout=60) as client:
-            r = await client.put(api_url, json=payload)
-            r.raise_for_status()
-
-        download_url = self.url_for(stored_name)
-        logger.info("Uploaded %s -> %s", stored_name, download_url)
-        return {"stored_name": stored_name, "url": download_url}
-
-    async def delete(self, stored_name: str) -> None:
-        """
-        Delete a file from GitHub.
-        Fetches the blob SHA first (required by the API), then deletes.
-        Silently ignores 404.
-        """
-        _require_env()
-
-        repo_path = self._repo_path(stored_name)
+    async def _github_delete(self, stored_name: str) -> None:
+        repo_path = self._github_repo_path(stored_name, _folder())
         api_url = f"{_GITHUB_API}/repos/{_owner()}/{_repo()}/contents/{repo_path}"
 
         async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
@@ -202,30 +241,47 @@ class FileStorageService:
 
         logger.info("Deleted %s from GitHub repo", stored_name)
 
+    # ── Public API (backend-agnostic — dispatches by stored_path shape) ─────
+
+    def url_for(self, stored_name: str) -> str:
+        if _is_blob_path(stored_name):
+            return self._blob_url_for(stored_name)
+        return self._github_url_for(stored_name)
+
+    async def fetch_content(self, stored_name: str) -> bytes:
+        if _is_blob_path(stored_name):
+            return await self._blob_fetch_content(stored_name)
+        return await self._github_fetch_content(stored_name)
+
+    async def upload(
+        self,
+        content: bytes,
+        original_name: str,
+        mime_type: str,
+    ) -> dict[str, str]:
+        """
+        Upload bytes to Azure Blob Storage and return:
+            {"stored_name": "evidence/8d/uuid.jpg", "url": "https://...blob.core.windows.net/..."}
+        """
+        return await self._blob_upload(content, original_name, mime_type, _BLOB_EVIDENCE_FOLDER)
+
+    async def delete(self, stored_name: str) -> None:
+        if _is_blob_path(stored_name):
+            await self._blob_delete(stored_name)
+        else:
+            await self._github_delete(stored_name)
+
     async def upload_report(
         self,
         content: bytes,
         filename: str,
     ) -> dict[str, str]:
-        _require_env()
-        repo_path = f"{_reports_folder()}/{filename}"
-        encoded = base64.b64encode(content).decode()
-        api_url = f"{_GITHUB_API}/repos/{_owner()}/{_repo()}/contents/{repo_path}"
-        payload = {
-            "message": f"chore: export 8D report {filename}",
-            "content": encoded,
-            "branch": _branch(),
-        }
-        async with httpx.AsyncClient(headers=_headers(), timeout=60) as client:
-            r = await client.put(api_url, json=payload)
-            r.raise_for_status()
-        return {"stored_name": filename, "url": self.url_for_report(filename)}
+        blob_name = self._blob_path(filename, _BLOB_REPORTS_FOLDER)
+        return await self._blob_upload_named(content, blob_name, "application/octet-stream")
 
     def url_for_report(self, filename: str) -> str:
-        return (
-            f"https://raw.githubusercontent.com"
-            f"/{_owner()}/{_repo()}/{_branch()}/{_reports_folder()}/{filename}"
-        )
+        blob_name = self._blob_path(filename, _BLOB_REPORTS_FOLDER)
+        return self._blob_url_for(blob_name)
 
 
 # ── Singleton — import this everywhere ───────────────────────────────────────

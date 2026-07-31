@@ -205,7 +205,7 @@ def _parse_action_scope(
     if action_type is not None and action_type not in VALID_ACTION_TYPES:
         raise HTTPException(
             status_code=422,
-            detail=f"action_type must be 'occurrence' or 'detection', got '{action_type}'.",
+            detail=f"action_type must be one of {sorted(VALID_ACTION_TYPES)}, got '{action_type}'.",
         )
 
     return base_key, action_type, action_index
