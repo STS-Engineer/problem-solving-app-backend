@@ -123,6 +123,42 @@ class ComplaintListItem(BaseModel):
         from_attributes = True
 
 
+class ArchivedComplaintFile(BaseModel):
+    id: int
+    original_name: str
+    url: str
+    size_bytes: int
+    mime_type: Optional[str]
+
+
+class ArchivedComplaintListItem(BaseModel):
+    """Historical complaints imported from the Monday.com 'Close' board —
+    no Report/ReportStep 8D trail, just the archived metadata + linked files."""
+
+    id: int
+    reference_number: str
+    complaint_name: str
+    customer: Optional[str]
+    customer_plant_name: Optional[str]
+    avocarbon_plant: Optional[str]
+    product_line: str
+    quality_issue_warranty: Optional[str]
+    defects: Optional[str]
+    concerned_application: Optional[str]
+    avocarbon_product_type: Optional[str]
+    potential_avocarbon_process_linked_to_problem: Optional[str]
+    complaint_description: Optional[str]
+    customer_complaint_date: Optional[date]
+    complaint_opening_date: Optional[date]
+    closed_at: Optional[datetime]
+    repetitive_complete_with_number: Optional[str]
+    external_reference: Optional[str]
+    files: List[ArchivedComplaintFile] = []
+
+    class Config:
+        from_attributes = True
+
+
 class ComplaintSyncResponse(BaseModel):
     complaints: List[ComplaintRead]
     count: int

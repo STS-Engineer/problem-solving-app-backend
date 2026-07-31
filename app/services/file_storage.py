@@ -42,6 +42,7 @@ _DEFAULT_REPORTS_FOLDER = "exports/8d-reports"
 
 _BLOB_EVIDENCE_FOLDER = "evidence/8d"
 _BLOB_REPORTS_FOLDER = "reports/8d"
+_BLOB_ARCHIVE_FOLDER = "archive/monday"
 
 
 def _is_blob_path(stored_name: str) -> bool:
@@ -278,6 +279,23 @@ class FileStorageService:
     ) -> dict[str, str]:
         blob_name = self._blob_path(filename, _BLOB_REPORTS_FOLDER)
         return await self._blob_upload_named(content, blob_name, "application/octet-stream")
+
+    async def upload_archive(
+        self,
+        content: bytes,
+        original_name: str,
+        mime_type: str,
+        external_reference: str,
+    ) -> dict[str, str]:
+        """
+        Upload a historical file archived from an external system (e.g. the
+        Monday.com "Close" board import). Kept in its own blob folder,
+        grouped by the source item's id, separate from live 8D evidence —
+        these files were never part of an in-app 8D workflow.
+        """
+        return await self._blob_upload(
+            content, original_name, mime_type, f"{_BLOB_ARCHIVE_FOLDER}/{external_reference}"
+        )
 
     def url_for_report(self, filename: str) -> str:
         blob_name = self._blob_path(filename, _BLOB_REPORTS_FOLDER)

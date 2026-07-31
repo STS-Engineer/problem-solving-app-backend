@@ -126,6 +126,16 @@ class Complaint(Base):
         comment="Email of person who approved/closed the complaint",
     )
 
+    # Origin tag — NULL for complaints created via the normal form/intake flow.
+    # 'monday_import' for historical closed complaints archived from the
+    # Monday.com "Close" board (no Report/ReportStep 8D trail — see
+    # scripts/import_monday_closed_complaints.py).
+    source = Column(String(30), nullable=True, index=True)
+    # The source system's own id (e.g. Monday item_id) — makes re-running an
+    # import idempotent. Uniqueness is enforced per-source by the importer,
+    # not by the DB, since two different source systems could reuse an id.
+    external_reference = Column(String(100), nullable=True, index=True)
+
     # Relationships
     reporter = relationship(
         "User", foreign_keys=[reported_by], back_populates="reported_complaints"

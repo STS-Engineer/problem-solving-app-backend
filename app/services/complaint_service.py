@@ -281,6 +281,11 @@ class ComplaintService:
             fulfilled_count.label("fulfilled_count"),
         ).outerjoin(Report, Report.complaint_id == Complaint.id)
 
+        # Historical complaints archived from Monday.com have no Report/
+        # ReportStep trail and live in their own "Archived" section
+        # (see list_archived_complaints) — never mix them into this list.
+        q = q.filter(Complaint.source.is_(None))
+
         # Filter on the clean status values ("open", "in_progress", "closed")
         if status:
             q = q.filter(Complaint.status == status)
@@ -336,6 +341,85 @@ class ComplaintService:
             results.append(complaint)
 
         return results
+
+    @staticmethod
+    def list_archived_complaints(
+        db: Session,
+        skip: int = 0,
+        limit: int = 50,
+        search: Optional[str] = None,
+        customer: Optional[str] = None,
+        plant: Optional[str] = None,
+    ) -> List[Complaint]:
+        """
+        Historical complaints archived from the Monday.com "Close" board
+        (source='monday_import') — no Report/ReportStep 8D trail, just the
+        stored metadata plus whatever files were attached on Monday.
+        """
+        from app.models.file import File as FileModel
+
+        q = db.query(Complaint).filter(Complaint.source == "monday_import")
+        if customer:
+            q = q.filter(Complaint.customer == customer)
+        if plant:
+            q = q.filter(Complaint.avocarbon_plant == plant)
+        if search:
+            like = f"%{search}%"
+            q = q.filter(
+                or_(
+                    Complaint.complaint_name.ilike(like),
+                    Complaint.customer.ilike(like),
+                    Complaint.reference_number.ilike(like),
+                    Complaint.external_reference.ilike(like),
+                )
+            )
+        complaints = (
+            q.order_by(Complaint.complaint_opening_date.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
+        if not complaints:
+            return []
+
+        complaint_ids = [c.id for c in complaints]
+        files_by_complaint: dict[int, list[FileModel]] = {}
+        for f in (
+            db.query(FileModel)
+            .filter(FileModel.complaint_id.in_(complaint_ids), FileModel.source == "monday_import")
+            .all()
+        ):
+            files_by_complaint.setdefault(f.complaint_id, []).append(f)
+
+        for c in complaints:
+            setattr(c, "_archived_files", files_by_complaint.get(c.id, []))
+
+        return complaints
+
+    @staticmethod
+    def count_archived_complaints(
+        db: Session,
+        search: Optional[str] = None,
+        customer: Optional[str] = None,
+        plant: Optional[str] = None,
+    ) -> int:
+        q = db.query(func.count(Complaint.id)).filter(Complaint.source == "monday_import")
+        if customer:
+            q = q.filter(Complaint.customer == customer)
+        if plant:
+            q = q.filter(Complaint.avocarbon_plant == plant)
+        if search:
+            like = f"%{search}%"
+            q = q.filter(
+                or_(
+                    Complaint.complaint_name.ilike(like),
+                    Complaint.customer.ilike(like),
+                    Complaint.reference_number.ilike(like),
+                    Complaint.external_reference.ilike(like),
+                )
+            )
+        return q.scalar() or 0
 
     @staticmethod
     def update_complaint(

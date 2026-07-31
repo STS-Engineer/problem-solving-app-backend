@@ -18,6 +18,8 @@ openpyxl
 apscheduler
 asyncpg
 azure-storage-blob
+# azure-identity
+aiohttp
 matplotlib
 reportlab
 numpy

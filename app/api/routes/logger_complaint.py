@@ -125,7 +125,6 @@ async def list_complaints_for_logger(
     status: str | None = Query(None),
     plant: str | None = Query(None),
     priority: str | None = Query(None),
-    customer: str | None = Query(None),
     has_escalation: bool | None = Query(
         None, description="Filter complaints that have at least one escalation"
     ),
@@ -158,7 +157,6 @@ async def list_complaints_for_logger(
             Complaint.reference_number.ilike(like)
             | Complaint.complaint_name.ilike(like)
             | Complaint.customer.ilike(like)
-            | Complaint.customer.ilike(f"%{customer}%")
         )
     if status:
         base_q = base_q.where(Complaint.status == status)
