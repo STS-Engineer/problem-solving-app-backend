@@ -10,14 +10,21 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.models.complaint import Complaint
-from app.services.dashboard_service import DashboardService
+from app.services.dashboard_service import (
+    DashboardService,
+    OPEN_STATUSES,
+    period_date_column,
+)
 
 router = APIRouter()
 
 
 MIN_SUPPORTED_YEAR = 2020
 MAX_COMPARISON_YEARS = 5
-OPEN_COMPLAINT_STATUSES = {"open", "in_progress", "under_review"}
+# A complaint mid-8D has status set to its current step code (D1..D8), not a
+# literal "in_progress"/"under_review" — reuse the service's canonical open-
+# status set instead of a narrower local one that misses those step codes.
+OPEN_COMPLAINT_STATUSES = OPEN_STATUSES
 
 
 def _current_year() -> int:
@@ -126,10 +133,12 @@ def _validate_year_list(years: Optional[List[int]]) -> List[int]:
 
 
 def _build_intake_year_filter(year: int):
-    return (
-        Complaint.customer_complaint_date.isnot(None),
-        extract("year", Complaint.customer_complaint_date) == year,
-    )
+    # period_date_column() = customer_complaint_date, falling back to
+    # complaint_opening_date only when the intake date is missing — same
+    # canonical volume/trend anchor as the main /stats endpoint, so this
+    # widget's numbers and the year picker agree with the main dashboard.
+    col = period_date_column()
+    return (extract("year", col) == year,)
 
 
 def _build_intake_period_filter(
@@ -137,10 +146,11 @@ def _build_intake_period_filter(
     month: Optional[int] = None,
     quarter: Optional[int] = None,
 ) -> List[Any]:
+    col = period_date_column()
     filters: List[Any] = list(_build_intake_year_filter(year))
 
     if month is not None:
-        filters.append(extract("month", Complaint.customer_complaint_date) == month)
+        filters.append(extract("month", col) == month)
     elif quarter is not None:
         quarter_months = {
             1: [1, 2, 3],
@@ -148,11 +158,7 @@ def _build_intake_period_filter(
             3: [7, 8, 9],
             4: [10, 11, 12],
         }
-        filters.append(
-            extract("month", Complaint.customer_complaint_date).in_(
-                quarter_months[quarter]
-            )
-        )
+        filters.append(extract("month", col).in_(quarter_months[quarter]))
 
     return filters
 
@@ -183,15 +189,15 @@ def _get_open_complaints_count(
 @router.get("/available-years")
 def get_available_years(db: Session = Depends(get_db)) -> Dict[str, Any]:
     """
-    Return the available reporting years based on complaint intake date
-    (`customer_complaint_date`).
+    Return the available reporting years, using the same canonical
+    volume/trend period anchor as `/stats` (customer complaint date, falling
+    back to opening date) — so every year in this list actually has data
+    under the year the main dashboard filters by.
     """
+    col = period_date_column()
     years = (
-        db.query(
-            distinct(extract("year", Complaint.customer_complaint_date)).label("year")
-        )
-        .filter(Complaint.customer_complaint_date.isnot(None))
-        .order_by(extract("year", Complaint.customer_complaint_date).desc())
+        db.query(distinct(extract("year", col)).label("year"))
+        .order_by(extract("year", col).desc())
         .all()
     )
 
@@ -219,12 +225,16 @@ def get_dashboard_stats(
         default=None,
         description="Optional quarter filter (1-4). Cannot be used with month.",
     ),
+    plant: Optional[str] = Query(
+        default=None,
+        description="Optional AVOCarbon plant filter (must match PlantEnum, e.g. 'MONTERREY').",
+    ),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """
     Return the full dashboard payload.
 
-    Supports yearly, monthly, and quarterly filtering.
+    Supports yearly, monthly, quarterly, and plant filtering.
     """
     filters = _validate_period_filters(
         year=year,
@@ -237,6 +247,7 @@ def get_dashboard_stats(
         year=filters["year"],
         month=filters["month"],
         quarter=filters["quarter"],
+        plant=plant,
     )
 
     return stats

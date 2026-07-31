@@ -1,4 +1,5 @@
 # app/services/dashboard_service.py
+import math
 from datetime import datetime, date, timezone
 from typing import Dict, List, Any, Optional
 from sqlalchemy import func, case, extract, and_, or_
@@ -45,6 +46,27 @@ CLOSED_STATUSES = {"resolved", "closed", "rejected"}
 # (the complaint was withdrawn, not resolved) and is excluded from open/closed KPIs.
 
 
+def period_date_column():
+    """Canonical "which reporting period does this complaint belong to" anchor.
+
+    Volume/trend KPIs (totals, monthly/quarterly breakdowns, the year picker)
+    are scoped to when the CUSTOMER complained (`customer_complaint_date`),
+    matching standard complaint-scorecard/IATF reporting practice — a
+    complaint counts in the period it was received, not whenever the plant
+    got around to opening the formal 8D. Anchoring on the opening date instead
+    would let slow intake processing quietly shift complaints into a later
+    period. Falls back to `complaint_opening_date` only when the customer
+    date is missing, so a complaint is never silently dropped from every
+    chart over a single missing field.
+
+    Process-execution/SLA KPIs (acknowledgement delay, step SLA compliance,
+    CQT lateness, overdue steps, resolution cycle time) intentionally do NOT
+    use this — they scope on `complaint_opening_date` directly, since that's
+    when their internal clock actually starts ticking.
+    """
+    return func.coalesce(Complaint.customer_complaint_date, Complaint.complaint_opening_date)
+
+
 def _step_overdue_condition(now: datetime):
     """A ReportStep is overdue when its SLA deadline has passed without completion.
 
@@ -78,12 +100,24 @@ class DashboardService:
         quarter: Optional[int] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        plant: Optional[str] = None,
     ) -> Dict[str, Any]:
         if year is None:
             year = datetime.now().year
 
         base_filter = DashboardService._build_filter(
-            year, month, quarter, start_date, end_date
+            year, month, quarter, start_date, end_date, plant
+        )
+        # Process-execution/SLA KPIs scope on the internal opening date, not
+        # customer intake — see period_date_column() docstring.
+        ops_filter = DashboardService._build_filter(
+            year,
+            month,
+            quarter,
+            start_date,
+            end_date,
+            plant,
+            date_column=Complaint.complaint_opening_date,
         )
 
         total_complaints = (
@@ -114,9 +148,7 @@ class DashboardService:
             # existing charts
             # NOTE: monthly charts use complaint_opening_date (operational date),
             # not created_at (system insert timestamp)
-            "monthly_data": DashboardService._get_monthly_by_plant(
-                db, year, start_date, end_date
-            ),
+            "monthly_data": DashboardService._get_monthly_by_plant(db, base_filter),
             "total_by_plant": total_by_plant,
             "claims_by_plant_customer": DashboardService._get_claims_by_plant_customer(
                 db, base_filter
@@ -124,9 +156,7 @@ class DashboardService:
             "customer_vs_sites": DashboardService._get_customer_vs_sites(
                 db, base_filter
             ),
-            "status_monthly": DashboardService._get_status_monthly(
-                db, year, start_date, end_date
-            ),
+            "status_monthly": DashboardService._get_status_monthly(db, base_filter),
             "delay_time": [],  # deprecated stub
             "defect_types": DashboardService._get_defect_types(db, base_filter),
             "product_types": DashboardService._get_product_types(db, base_filter),
@@ -140,9 +170,7 @@ class DashboardService:
             "complaints_by_product_line_plant": DashboardService._get_complaints_by_product_line_plant(
                 db, base_filter
             ),
-            "valeo_monthly": DashboardService._get_valeo_monthly(
-                db, year, start_date, end_date
-            ),
+            "valeo_monthly": DashboardService._get_valeo_monthly(db, base_filter),
             "complaints_per_product_line": DashboardService._get_complaints_per_product_line(
                 db, base_filter
             ),
@@ -153,12 +181,14 @@ class DashboardService:
                 db, base_filter
             ),
             "cs_type_per_plant_monthly": DashboardService._get_cs_type_per_plant_monthly(
-                db, year, start_date, end_date
+                db, base_filter
             ),
             "open_closed_per_plant_monthly": DashboardService._get_open_closed_per_plant_monthly(
-                db, year, start_date, end_date
+                db, base_filter
             ),
-            "quarterly_by_plant": DashboardService._get_quarterly_by_plant(db, year),
+            "quarterly_by_plant": DashboardService._get_quarterly_by_plant(
+                db, base_filter
+            ),
             "repetitive_distribution": DashboardService._get_repetitive_distribution(
                 db, base_filter
             ),
@@ -166,47 +196,44 @@ class DashboardService:
                 db, base_filter
             ),
             "overdue_complaints": DashboardService._get_overdue_complaints(
-                db, base_filter
+                db, ops_filter
             ),
-            "overdue_steps": DashboardService._get_overdue_steps(
-                db, year, start_date, end_date
-            ),
+            "overdue_steps": DashboardService._get_overdue_steps(db, ops_filter),
             "overdue_vs_toclose_by_plant": DashboardService._get_overdue_vs_toclose_by_plant(
-                db, year, start_date, end_date
+                db, ops_filter
             ),
-            "cqt_lateness": DashboardService._get_cqt_lateness(db, base_filter),
+            "cqt_lateness": DashboardService._get_cqt_lateness(db, ops_filter),
             "monthly_vs_target": DashboardService._get_monthly_vs_target(
-                db, year, start_date, end_date
+                db, base_filter, year, month, quarter, plant
             ),
             "cost_by_step_plant": DashboardService._get_cost_by_step_plant(
-                db, year, start_date, end_date
+                db, base_filter
             ),
-            "report_stats": DashboardService._get_report_statistics(
-                db, year, start_date, end_date
-            ),
+            "report_stats": DashboardService._get_report_statistics(db, base_filter),
             # ── NEW KPIs ──────────────────────────────────────────────────────
             # 1. Acknowledgement delay (customer_complaint_date → complaint_opening_date)
+            # Scoped by customer intake date (base_filter), not opening date —
+            # this is "of the complaints customers raised in this period, how
+            # fast did we acknowledge them", a customer-responsiveness framing.
             "acknowledgement_delay": DashboardService._get_acknowledgement_delay(
                 db, base_filter
             ),
             # 2. Resolution cycle time (complaint_opening_date → closed_at)
             "resolution_cycle_time": DashboardService._get_resolution_cycle_time(
-                db, base_filter
+                db, ops_filter
             ),
             # 3. CS2 SLA compliance (dedicated for CS2 warranty complaints)
             "cs2_sla_compliance": DashboardService._get_cs2_sla_compliance(
-                db, base_filter
+                db, ops_filter
             ),
             # 4. Complaint ageing buckets (open complaints by age)
-            "complaint_ageing": DashboardService._get_complaint_ageing(db, base_filter),
+            "complaint_ageing": DashboardService._get_complaint_ageing(db, ops_filter),
             # 5. 8D step SLA compliance per step per plant
             "step_sla_compliance": DashboardService._get_step_sla_compliance(
-                db, base_filter
+                db, ops_filter
             ),
             # 6. Recurrence rate % per plant per month
-            "recurrence_rate": DashboardService._get_recurrence_rate(
-                db, year, start_date, end_date
-            ),
+            "recurrence_rate": DashboardService._get_recurrence_rate(db, base_filter),
             # 7. Process / application Pareto per plant
             "process_pareto": DashboardService._get_process_pareto(db, base_filter),
             "application_pareto": DashboardService._get_application_pareto(
@@ -216,13 +243,7 @@ class DashboardService:
             "escalation_rate": DashboardService._get_escalation_rate(db, base_filter),
             # 9. Complaints with no due date assigned (risk indicator)
             "no_due_date_count": DashboardService._get_no_due_date_count(
-                db, base_filter
-            ),
-            # 10. Rejection rate per customer / plant
-            "rejection_rate": DashboardService._get_rejection_rate(db, base_filter),
-            # 11. Resolved-to-closed lag (awaiting customer sign-off)
-            "resolved_to_closed_lag": DashboardService._get_resolved_to_closed_lag(
-                db, base_filter
+                db, ops_filter
             ),
             # 12. Priority distribution (the priority field was never surfaced)
             "priority_distribution": DashboardService._get_priority_distribution(
@@ -240,59 +261,58 @@ class DashboardService:
         quarter: Optional[int] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        plant: Optional[str] = None,
+        date_column=None,
     ):
         """
-        Filter on complaint_opening_date (operational treatment date), NOT created_at.
-        If start_date/end_date are provided they take precedence over year/month/quarter.
+        Scope complaints to a reporting period.
+
+        `date_column` selects which date anchors the period — defaults to
+        `period_date_column()` (customer complaint date, falling back to
+        opening date), the correct anchor for volume/trend KPIs. Callers
+        computing process-execution/SLA KPIs pass
+        `Complaint.complaint_opening_date` explicitly instead, since those
+        clocks start at internal opening, not customer intake.
+        If start_date/end_date are provided they take precedence over
+        year/month/quarter.
         """
+        col = date_column if date_column is not None else period_date_column()
+
         if start_date and end_date:
-            return and_(
-                Complaint.complaint_opening_date >= start_date,
-                Complaint.complaint_opening_date <= end_date,
-            )
+            filters = [col >= start_date, col <= end_date]
+        else:
+            filters = [extract("year", col) == year]
 
-        filters = [extract("year", Complaint.complaint_opening_date) == year]
+            if month:
+                filters.append(extract("month", col) == month)
+            elif quarter:
+                q_months = {1: [1, 2, 3], 2: [4, 5, 6], 3: [7, 8, 9], 4: [10, 11, 12]}
+                months = q_months.get(quarter, [])
+                if months:
+                    filters.append(extract("month", col).in_(months))
 
-        if month:
-            filters.append(extract("month", Complaint.complaint_opening_date) == month)
-        elif quarter:
-            q_months = {1: [1, 2, 3], 2: [4, 5, 6], 3: [7, 8, 9], 4: [10, 11, 12]}
-            months = q_months.get(quarter, [])
-            if months:
-                filters.append(
-                    extract("month", Complaint.complaint_opening_date).in_(months)
-                )
+        if plant:
+            try:
+                filters.append(Complaint.avocarbon_plant == PlantEnum(plant))
+            except ValueError:
+                # Unknown plant value — match nothing rather than raise or silently
+                # ignore the filter (avoids returning unfiltered data on a typo'd plant).
+                filters.append(False)
 
         return and_(*filters)
-
-    @staticmethod
-    def _year_filter(year: int, start_date: Optional[date], end_date: Optional[date]):
-        """Helper: full-year filter respecting date range override."""
-        if start_date and end_date:
-            return and_(
-                Complaint.complaint_opening_date >= start_date,
-                Complaint.complaint_opening_date <= end_date,
-            )
-        return extract("year", Complaint.complaint_opening_date) == year
 
     # ─────────────────────────────────────────────────────────────────────────
     # Existing helpers — updated to use complaint_opening_date
     # ─────────────────────────────────────────────────────────────────────────
     @staticmethod
-    def _get_monthly_by_plant(
-        db: Session,
-        year: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> List[Dict]:
-        yf = DashboardService._year_filter(year, start_date, end_date)
+    def _get_monthly_by_plant(db: Session, base_filter) -> List[Dict]:
         results = (
             db.query(
                 extract("month", Complaint.complaint_opening_date).label("month"),
                 Complaint.avocarbon_plant,
                 func.count(Complaint.id).label("count"),
             )
-            .filter(yf)
+            .filter(base_filter)
             .group_by(
                 extract("month", Complaint.complaint_opening_date),
                 Complaint.avocarbon_plant,
@@ -448,20 +468,14 @@ class DashboardService:
         return list(customer_data.values())
 
     @staticmethod
-    def _get_status_monthly(
-        db: Session,
-        year: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> List[Dict]:
-        yf = DashboardService._year_filter(year, start_date, end_date)
+    def _get_status_monthly(db: Session, base_filter) -> List[Dict]:
         results = (
             db.query(
                 extract("month", Complaint.complaint_opening_date).label("month"),
                 Complaint.status,
                 func.count(Complaint.id).label("count"),
             )
-            .filter(yf)
+            .filter(base_filter)
             .group_by(
                 extract("month", Complaint.complaint_opening_date), Complaint.status
             )
@@ -596,12 +610,7 @@ class DashboardService:
         return sorted(agg.values(), key=lambda x: x["total"], reverse=True)
 
     @staticmethod
-    def _get_valeo_monthly(
-        db: Session,
-        year: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> List[Dict]:
+    def _get_valeo_monthly(db: Session, base_filter) -> List[Dict]:
         months = [
             "Jan",
             "Feb",
@@ -616,14 +625,13 @@ class DashboardService:
             "Nov",
             "Dec",
         ]
-        yf = DashboardService._year_filter(year, start_date, end_date)
         results = (
             db.query(
                 extract("month", Complaint.complaint_opening_date).label("month"),
                 func.count(Complaint.id).label("count"),
             )
             .filter(
-                yf,
+                base_filter,
                 func.upper(Complaint.customer).like("%VALEO%"),
             )
             .group_by(extract("month", Complaint.complaint_opening_date))
@@ -705,12 +713,7 @@ class DashboardService:
         ]
 
     @staticmethod
-    def _get_cs_type_per_plant_monthly(
-        db: Session,
-        year: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> List[Dict]:
+    def _get_cs_type_per_plant_monthly(db: Session, base_filter) -> List[Dict]:
         months = [
             "Jan",
             "Feb",
@@ -726,7 +729,6 @@ class DashboardService:
             "Dec",
         ]
         plants = [p.value for p in PlantEnum]
-        yf = DashboardService._year_filter(year, start_date, end_date)
 
         results = (
             db.query(
@@ -735,7 +737,7 @@ class DashboardService:
                 Complaint.quality_issue_warranty,
                 func.count(Complaint.id).label("count"),
             )
-            .filter(yf)
+            .filter(base_filter)
             .group_by(
                 extract("month", Complaint.complaint_opening_date),
                 Complaint.avocarbon_plant,
@@ -771,12 +773,7 @@ class DashboardService:
         return rows
 
     @staticmethod
-    def _get_open_closed_per_plant_monthly(
-        db: Session,
-        year: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> List[Dict]:
+    def _get_open_closed_per_plant_monthly(db: Session, base_filter) -> List[Dict]:
         months = [
             "Jan",
             "Feb",
@@ -791,7 +788,6 @@ class DashboardService:
             "Nov",
             "Dec",
         ]
-        yf = DashboardService._year_filter(year, start_date, end_date)
 
         # CLOSED = all 8D steps fulfilled (business rule), NOT the status field.
         # Cancelled complaints are excluded from both open and closed.
@@ -804,7 +800,7 @@ class DashboardService:
                 func.coalesce(fc.c.fulfilled, 0).label("fulfilled"),
             )
             .outerjoin(fc, fc.c.cid == Complaint.id)
-            .filter(yf)
+            .filter(base_filter)
             .all()
         )
 
@@ -833,7 +829,7 @@ class DashboardService:
         return rows
 
     @staticmethod
-    def _get_quarterly_by_plant(db: Session, year: int) -> List[Dict]:
+    def _get_quarterly_by_plant(db: Session, base_filter) -> List[Dict]:
         plants = [p.value for p in PlantEnum]
         Q_MONTHS = {
             "Q1": [1, 2, 3],
@@ -848,7 +844,7 @@ class DashboardService:
                 Complaint.avocarbon_plant,
                 func.count(Complaint.id).label("count"),
             )
-            .filter(extract("year", Complaint.complaint_opening_date) == year)
+            .filter(base_filter)
             .group_by(
                 extract("month", Complaint.complaint_opening_date),
                 Complaint.avocarbon_plant,
@@ -1020,14 +1016,8 @@ class DashboardService:
         return {"total": total_overdue, "by_plant": by_plant, "no_due_date": no_due}
 
     @staticmethod
-    def _get_overdue_steps(
-        db: Session,
-        year: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> List[Dict]:
+    def _get_overdue_steps(db: Session, base_filter) -> List[Dict]:
         now = datetime.utcnow()
-        yf = DashboardService._year_filter(year, start_date, end_date)
         results = (
             db.query(
                 ReportStep.step_code,
@@ -1037,7 +1027,7 @@ class DashboardService:
             .join(Report, ReportStep.report_id == Report.id)
             .join(Complaint, Report.complaint_id == Complaint.id)
             .filter(
-                yf,
+                base_filter,
                 Complaint.status.in_(list(OPEN_STATUSES)),
                 _step_overdue_condition(now),
             )
@@ -1059,22 +1049,16 @@ class DashboardService:
         ]
 
     @staticmethod
-    def _get_overdue_vs_toclose_by_plant(
-        db: Session,
-        year: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> List[Dict]:
+    def _get_overdue_vs_toclose_by_plant(db: Session, base_filter) -> List[Dict]:
         """Per plant, for open complaints in the period:
           - to_close: number of 8D steps still not fulfilled (remaining work)
           - overdue:  the subset of those whose SLA deadline has passed
 
         overdue is a subset of to_close, so the chart reads "of the steps still
-        to close, how many are already overdue". Respects the year/month/quarter
-        filter, giving the per-month / per-year views.
+        to close, how many are already overdue". Respects the year/month/quarter/
+        plant filter, giving the per-month / per-year views.
         """
         now = datetime.utcnow()
-        yf = DashboardService._year_filter(year, start_date, end_date)
 
         base = (
             db.query(
@@ -1087,7 +1071,7 @@ class DashboardService:
             .join(Report, Report.complaint_id == Complaint.id)
             .join(ReportStep, ReportStep.report_id == Report.id)
             .filter(
-                yf,
+                base_filter,
                 Complaint.status.in_(list(OPEN_STATUSES)),
                 ReportStep.status != "fulfilled",
             )
@@ -1109,9 +1093,11 @@ class DashboardService:
     @staticmethod
     def _get_monthly_vs_target(
         db: Session,
+        base_filter,
         year: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
+        month: Optional[int] = None,
+        quarter: Optional[int] = None,
+        plant: Optional[str] = None,
     ) -> List[Dict]:
         plants = [p.value for p in PlantEnum]
         months = [
@@ -1128,7 +1114,6 @@ class DashboardService:
             "Nov",
             "Dec",
         ]
-        yf = DashboardService._year_filter(year, start_date, end_date)
 
         def _monthly_counts(year_filter):
             return (
@@ -1145,29 +1130,45 @@ class DashboardService:
                 .all()
             )
 
-        results = _monthly_counts(yf)
-        # Target = continuous-improvement goal: 15% fewer than the SAME month of
+        results = _monthly_counts(base_filter)
+        # Target = continuous-improvement goal: 15% fewer than the SAME period of
         # the previous year (target = prev-year actual × 0.85).
-        prev_results = _monthly_counts(
-            extract("year", Complaint.complaint_opening_date) == year - 1
+        prev_filter = DashboardService._build_filter(
+            year - 1, month, quarter, plant=plant
         )
+        prev_results = _monthly_counts(prev_filter)
 
-        def _count_for(rows_, m, plant):
+        # Whether the previous year has ANY data at all for a plant (regardless of
+        # the current month/quarter narrowing) — distinguishes "genuinely zero
+        # last year" from "no historical baseline exists yet" so the target line
+        # doesn't silently read as 0 when there is nothing to compare against.
+        prev_year_any_filter = DashboardService._build_filter(year - 1, plant=plant)
+        prev_year_any_results = _monthly_counts(prev_year_any_filter)
+        has_prev_year_baseline = {
+            p: any(r.avocarbon_plant == p for r in prev_year_any_results)
+            for p in plants
+        }
+
+        def _count_for(rows_, m, plant_):
             return next(
-                (r.count for r in rows_ if int(r.month) == m and r.avocarbon_plant == plant),
+                (
+                    r.count
+                    for r in rows_
+                    if int(r.month) == m and r.avocarbon_plant == plant_
+                ),
                 0,
             )
 
         rows = []
         for m in range(1, 13):
-            for plant in plants:
-                actual = _count_for(results, m, plant)
-                prev_actual = _count_for(prev_results, m, plant)
+            for p in plants:
+                actual = _count_for(results, m, p)
+                prev_actual = _count_for(prev_results, m, p)
                 target = round(prev_actual * 0.85, 1)
                 rows.append(
                     {
                         "month": months[m - 1],
-                        "plant": plant,
+                        "plant": p,
                         "actual": actual,
                         "target": target,
                         "prev_year_actual": prev_actual,
@@ -1175,18 +1176,16 @@ class DashboardService:
                         # No prior-year baseline → any complaint is above target.
                         "on_target": actual <= target if prev_actual > 0 else actual == 0,
                         "zero_target_breach": prev_actual == 0 and actual > 0,
+                        # True when the plant has no previous-year data at all, so a
+                        # target of 0 reflects "nothing to compare against" rather
+                        # than a genuine year-over-year improvement goal.
+                        "no_baseline": not has_prev_year_baseline.get(p, False),
                     }
                 )
         return rows
 
     @staticmethod
-    def _get_cost_by_step_plant(
-        db: Session,
-        year: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> List[Dict]:
-        yf = DashboardService._year_filter(year, start_date, end_date)
+    def _get_cost_by_step_plant(db: Session, base_filter) -> List[Dict]:
         results = (
             db.query(
                 Complaint.avocarbon_plant,
@@ -1196,7 +1195,7 @@ class DashboardService:
             )
             .join(Report, ReportStep.report_id == Report.id)
             .join(Complaint, Report.complaint_id == Complaint.id)
-            .filter(yf, ReportStep.cost.isnot(None))
+            .filter(base_filter, ReportStep.cost.isnot(None))
             .group_by(Complaint.avocarbon_plant, ReportStep.step_code)
             .all()
         )
@@ -1217,18 +1216,11 @@ class DashboardService:
         return [v for v in agg.values() if v["total"] > 0]
 
     @staticmethod
-    def _get_report_statistics(
-        db: Session,
-        year: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> Dict[str, Any]:
-        yf = DashboardService._year_filter(year, start_date, end_date)
-
+    def _get_report_statistics(db: Session, base_filter) -> Dict[str, Any]:
         total_reports = (
             db.query(func.count(Report.id))
             .join(Complaint, Report.complaint_id == Complaint.id)
-            .filter(yf)
+            .filter(base_filter)
             .scalar()
             or 0
         )
@@ -1236,7 +1228,7 @@ class DashboardService:
         report_status = (
             db.query(Report.status, func.count(Report.id).label("count"))
             .join(Complaint, Report.complaint_id == Complaint.id)
-            .filter(yf)
+            .filter(base_filter)
             .group_by(Report.status)
             .all()
         )
@@ -1244,14 +1236,14 @@ class DashboardService:
         step_completion = (
             db.query(
                 ReportStep.step_code,
-                func.count(case((ReportStep.status == "validated", 1))).label(
+                func.count(case((ReportStep.status == "fulfilled", 1))).label(
                     "completed"
                 ),
                 func.count(ReportStep.id).label("total"),
             )
             .join(Report, ReportStep.report_id == Report.id)
             .join(Complaint, Report.complaint_id == Complaint.id)
-            .filter(yf)
+            .filter(base_filter)
             .group_by(ReportStep.step_code)
             .all()
         )
@@ -1585,8 +1577,15 @@ class DashboardService:
         total = len(sorted_days)
 
         avg_overall = round(sum(sorted_days) / total, 1)
-        median = round(sorted_days[total // 2], 1)
-        p90 = round(sorted_days[int(total * 0.9)], 1)
+        if total % 2 == 0:
+            median = round((sorted_days[total // 2 - 1] + sorted_days[total // 2]) / 2, 1)
+        else:
+            median = round(sorted_days[total // 2], 1)
+        # Nearest-rank percentile: index 0 is rank 1, so rank ceil(0.9*total) is
+        # at index ceil(0.9*total) - 1. `int(total*0.9)` previously landed on
+        # the last index for round totals (e.g. total=10 -> index 9, the max).
+        p90_rank = max(1, math.ceil(total * 0.9))
+        p90 = round(sorted_days[p90_rank - 1], 1)
 
         cs1 = [
             d for r, d in all_days if "CS1" in (r.quality_issue_warranty or "").upper()
@@ -1901,12 +1900,7 @@ class DashboardService:
     # NEW KPI — 6. Recurrence rate % per plant per month
     # ─────────────────────────────────────────────────────────────────────────
     @staticmethod
-    def _get_recurrence_rate(
-        db: Session,
-        year: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> List[Dict]:
+    def _get_recurrence_rate(db: Session, base_filter) -> List[Dict]:
         """
         Per plant per month: total complaints vs repetitive complaints
         (repetition_number ≥ 1).
@@ -1928,7 +1922,6 @@ class DashboardService:
             "Dec",
         ]
         plants = [p.value for p in PlantEnum]
-        yf = DashboardService._year_filter(year, start_date, end_date)
 
         results = (
             db.query(
@@ -1937,7 +1930,7 @@ class DashboardService:
                 Complaint.repetitive_complete_with_number,
                 func.count(Complaint.id).label("count"),
             )
-            .filter(yf)
+            .filter(base_filter)
             .group_by(
                 extract("month", Complaint.complaint_opening_date),
                 Complaint.avocarbon_plant,
@@ -2166,123 +2159,6 @@ class DashboardService:
             "by_plant": [
                 {"plant": r.avocarbon_plant or "UNKNOWN", "count": r.count}
                 for r in by_plant
-            ],
-        }
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # NEW KPI — 10. Rejection rate per customer / plant
-    # ─────────────────────────────────────────────────────────────────────────
-    @staticmethod
-    def _get_rejection_rate(db: Session, base_filter) -> Dict[str, Any]:
-        """
-        % of complaints rejected per customer and per plant.
-        High rejection rate = quality perception mismatch or commercial tension.
-        """
-        total_by_customer = (
-            db.query(
-                Complaint.customer,
-                func.count(Complaint.id).label("total"),
-            )
-            .filter(base_filter)
-            .group_by(Complaint.customer)
-            .all()
-        )
-
-        rejected_by_customer = (
-            db.query(
-                Complaint.customer,
-                func.count(Complaint.id).label("count"),
-            )
-            .filter(base_filter, Complaint.status == "rejected")
-            .group_by(Complaint.customer)
-            .all()
-        )
-
-        rej_map = {r.customer: r.count for r in rejected_by_customer}
-        by_customer = [
-            {
-                "customer": r.customer or "N/A",
-                "total": r.total,
-                "rejected": rej_map.get(r.customer, 0),
-                "rejection_pct": (
-                    round(rej_map.get(r.customer, 0) / r.total * 100, 1)
-                    if r.total > 0
-                    else 0
-                ),
-            }
-            for r in total_by_customer
-            if rej_map.get(r.customer, 0) > 0
-        ]
-        by_customer.sort(key=lambda x: x["rejection_pct"], reverse=True)
-
-        total_rejected = sum(r.count for r in rejected_by_customer)
-        total_all = db.query(func.count(Complaint.id)).filter(base_filter).scalar() or 0
-
-        return {
-            "total_rejected": total_rejected,
-            "overall_rejection_pct": (
-                round(total_rejected / total_all * 100, 1) if total_all > 0 else 0
-            ),
-            "by_customer": by_customer[:15],
-        }
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # NEW KPI — 11. Resolved-to-closed lag (awaiting customer sign-off)
-    # ─────────────────────────────────────────────────────────────────────────
-    @staticmethod
-    def _get_resolved_to_closed_lag(db: Session, base_filter) -> Dict[str, Any]:
-        """
-        Complaints stuck in 'resolved' status awaiting customer approval.
-        updated_at approximates when status became resolved.
-        Anything > 7 days in resolved without closing is a flag.
-        """
-        now = datetime.utcnow()
-
-        stuck = (
-            db.query(
-                Complaint.avocarbon_plant,
-                Complaint.reference_number,
-                Complaint.customer,
-                Complaint.updated_at,
-            )
-            .filter(
-                base_filter,
-                Complaint.status == "resolved",
-                Complaint.closed_at.is_(None),
-            )
-            .all()
-        )
-
-        if not stuck:
-            return {"total_stuck": 0, "avg_days_stuck": None, "by_plant": []}
-
-        items = []
-        for r in stuck:
-            days = (now - r.updated_at).days if r.updated_at else 0
-            items.append(
-                {
-                    "plant": r.avocarbon_plant or "UNKNOWN",
-                    "reference_number": r.reference_number,
-                    "customer": r.customer or "N/A",
-                    "days_stuck": days,
-                }
-            )
-
-        items.sort(key=lambda x: x["days_stuck"], reverse=True)
-
-        plant_agg: Dict[str, List[int]] = {}
-        for it in items:
-            plant_agg.setdefault(it["plant"], []).append(it["days_stuck"])
-
-        return {
-            "total_stuck": len(items),
-            "avg_days_stuck": round(
-                sum(i["days_stuck"] for i in items) / len(items), 1
-            ),
-            "flagged": [i for i in items if i["days_stuck"] > 7],
-            "by_plant": [
-                {"plant": p, "count": len(v), "avg_days": round(sum(v) / len(v), 1)}
-                for p, v in plant_agg.items()
             ],
         }
 
