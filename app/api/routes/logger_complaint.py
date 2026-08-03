@@ -12,7 +12,7 @@ from fastapi import (
     File,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, exists as sa_exists
 from sqlalchemy.orm import selectinload
 
 from app.services import blob_storage
@@ -148,6 +148,12 @@ async def list_complaints_for_logger(
             selectinload(Complaint.report).selectinload(Report.steps),
             selectinload(Complaint.audit_logs),
         )
+        # Historical complaints archived from Monday.com have no Report/
+        # ReportStep at all (no 8D trail was ever tracked in this system for
+        # them), so they can never have a real escalation and don't belong
+        # in an escalation-tracking view. Exclude them, matching the same
+        # exclusion already applied to the main complaints list.
+        .where(Complaint.source.is_(None))
         .order_by(Complaint.created_at.desc())
     )
 
@@ -165,7 +171,22 @@ async def list_complaints_for_logger(
     if priority:
         base_q = base_q.where(Complaint.priority == priority)
 
-    # Count before pagination
+    # has_escalation must be applied IN the query, before both the count and
+    # the pagination — applying it only after loading a page (as before) made
+    # `total`/`pages` describe the wrong set, and page 2+ sliced the next 20
+    # unfiltered rows and filtered THOSE, so results and the reported total
+    # disagreed and could legitimately go blank before the real last page.
+    if has_escalation is not None:
+        escalated_exists = sa_exists(
+            select(ReportStep.id)
+            .join(Report, ReportStep.report_id == Report.id)
+            .where(Report.complaint_id == Complaint.id, ReportStep.escalation_count > 0)
+            .correlate(Complaint)
+        )
+        base_q = base_q.where(escalated_exists if has_escalation else ~escalated_exists)
+
+    # Count after every filter, including has_escalation, so it matches
+    # exactly what pagination below will page through.
     count_result = await db.execute(select(func.count()).select_from(base_q.subquery()))
     total: int = count_result.scalar_one()
 
@@ -182,12 +203,6 @@ async def list_complaints_for_logger(
             else None
         )
         total_esc = sum(s.escalation_count or 0 for s in steps)
-
-        # Apply has_escalation filter post-load (simpler than a subquery join)
-        if has_escalation is True and total_esc == 0:
-            continue
-        if has_escalation is False and total_esc > 0:
-            continue
 
         items.append(
             ComplaintLogItem(
