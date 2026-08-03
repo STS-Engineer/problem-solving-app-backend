@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.models.enums import PlantEnum, ProductLineEnum
 
@@ -37,6 +37,22 @@ class ComplaintBase(BaseModel):
 
     due_date: Optional[datetime] = None
 
+    @model_validator(mode="after")
+    def _check_date_order(self):
+        # A complaint can't have been opened before the customer even
+        # reported it — enforced client-side (max attribute + form
+        # validation) but repeated here since the API is a boundary anyone
+        # can call directly.
+        if (
+            self.customer_complaint_date is not None
+            and self.complaint_opening_date is not None
+            and self.customer_complaint_date > self.complaint_opening_date
+        ):
+            raise ValueError(
+                "customer_complaint_date cannot be after complaint_opening_date"
+            )
+        return self
+
 
 class ComplaintCreate(ComplaintBase):
     # Optional: set for UI-created complaints, NULL for email/bot-sourced ones
@@ -68,6 +84,22 @@ class ComplaintUpdate(BaseModel):
     status: Optional[str] = Field(None, max_length=50)
     severity: Optional[str] = Field(None, max_length=20)
     priority: Optional[str] = Field(None, max_length=20)
+
+    @model_validator(mode="after")
+    def _check_date_order(self):
+        # Only catches the case where both dates are sent in the same partial
+        # update — this schema doesn't see the existing DB row, so an update
+        # that only changes one of the two dates against an already-stored
+        # other value isn't checked here.
+        if (
+            self.customer_complaint_date is not None
+            and self.complaint_opening_date is not None
+            and self.customer_complaint_date > self.complaint_opening_date
+        ):
+            raise ValueError(
+                "customer_complaint_date cannot be after complaint_opening_date"
+            )
+        return self
     resolved_at: Optional[datetime] = None
 
     # due_date: Optional[datetime] = None
