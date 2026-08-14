@@ -43,6 +43,28 @@ class Settings(BaseSettings):
     AZURE_CONNECTION_STRING: str = ""
     AZURE_STORAGE_CONTAINER_NAME: str = ""
 
+    # ── Microsoft Graph (internal intake agent — mailbox monitoring) ─────────
+    # App registration used for the client-credentials (application permission)
+    # flow against Microsoft Graph. Requires Mail.Read/Mail.ReadWrite (and
+    # admin consent) granted on the shared claims mailbox. Leave empty to
+    # disable the internal agent (falls back to the external MCP agent path).
+    AZURE_TENANT_ID: str = ""
+    AZURE_CLIENT_ID: str = ""
+    AZURE_CLIENT_SECRET: str = ""
+    # UPN or object id of the shared claims mailbox being monitored.
+    GRAPH_MAILBOX_UPN: str = ""
+    # Public HTTPS URL Graph will POST change notifications to, e.g.
+    # https://<host>/api/v1/graph/webhook/mailbox
+    GRAPH_NOTIFICATION_URL: str = ""
+    # Secret echoed back by Graph on every notification (not the auth
+    # mechanism — just lets us drop notifications that didn't originate from
+    # the subscription we created).
+    GRAPH_WEBHOOK_CLIENT_STATE: str = ""
+    # Message subscriptions expire after at most ~4230 minutes (~2.9 days);
+    # renew a bit earlier than that to leave margin for the renewal job.
+    GRAPH_SUBSCRIPTION_MAX_MINUTES: int = 4230
+    GRAPH_SUBSCRIPTION_RENEW_MARGIN_MINUTES: int = 60
+
 
 settings = Settings()
 
