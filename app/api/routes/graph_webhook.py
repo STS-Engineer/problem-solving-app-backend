@@ -19,12 +19,14 @@ is a placeholder hook for that work.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.config import settings
+from app.db.session import SessionLocal
 from app.models.graph_subscription import GraphSubscription
 
 logger = logging.getLogger(__name__)
@@ -93,9 +95,39 @@ def _handle_notification(subscription_id: str | None, message_id: str) -> None:
     LLM service), then call EmailIntakeService.ingest directly (task 4).
     Logged-only for now so the webhook plumbing can be verified end-to-end
     before the rest of the pipeline lands.
+
+    Also stamps a breadcrumb (last_notification_at/message_id, a running
+    count) onto the GraphSubscription row so "did a notification arrive?"
+    can be checked via the DB / admin status endpoint instead of only logs.
+    Runs in a background task (after the HTTP response is sent), so it opens
+    its own DB session rather than reusing the request-scoped one.
     """
     logger.info(
         "Graph webhook: new message %s on subscription %s — fetch/classify/ingest not wired yet",
         message_id,
         subscription_id,
     )
+
+    db = SessionLocal()
+    try:
+        query = db.query(GraphSubscription)
+        sub = (
+            query.filter(GraphSubscription.subscription_id == subscription_id).first()
+            if subscription_id
+            else None
+        )
+        # Fall back to "the active subscription" if Graph didn't echo an id
+        # we recognize (shouldn't normally happen, but keeps the breadcrumb
+        # useful rather than silently no-op'ing).
+        if sub is None:
+            sub = query.filter(GraphSubscription.status == "active").first()
+        if sub is not None:
+            sub.last_notification_at = datetime.now(timezone.utc)
+            sub.last_notification_message_id = message_id
+            sub.notification_count = (sub.notification_count or 0) + 1
+            db.commit()
+    except Exception:
+        logger.exception("Failed to record notification breadcrumb for message %s", message_id)
+        db.rollback()
+    finally:
+        db.close()

@@ -42,6 +42,13 @@ class GraphSubscription(Base):
     last_renewed_at = Column(DateTime, nullable=True)
     last_error = Column(String(1000), nullable=True)
 
+    # Breadcrumb updated by the webhook itself on every notification received
+    # — lets you confirm "did a notification actually arrive?" via the DB /
+    # the admin status endpoint, without needing to tail application logs.
+    last_notification_at = Column(DateTime, nullable=True)
+    last_notification_message_id = Column(String(500), nullable=True)
+    notification_count = Column(Integer, nullable=False, default=0, server_default="0")
+
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )

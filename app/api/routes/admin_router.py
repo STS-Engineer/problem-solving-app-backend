@@ -269,6 +269,11 @@ def graph_subscription_status(db: Session = Depends(get_db)):
                 if r.last_renewed_at
                 else None,
                 "last_error": r.last_error,
+                "last_notification_at": r.last_notification_at.isoformat()
+                if r.last_notification_at
+                else None,
+                "last_notification_message_id": r.last_notification_message_id,
+                "notification_count": r.notification_count,
             }
             for r in rows
         ],
