@@ -85,29 +85,42 @@ def _auth_headers() -> dict:
     }
 
 
+def _raise_with_body(resp: requests.Response) -> None:
+    """
+    requests.HTTPError's default str() only shows the URL and status code —
+    Graph's actual error (e.g. "Subscription validation request failed...")
+    is in the response body, which is exactly what you need to debug a
+    rejected subscription/notification-url. Surface it in the message.
+    """
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        raise requests.HTTPError(f"{exc} — body: {resp.text[:1000]}", response=resp) from exc
+
+
 def graph_get(path: str, **kwargs) -> requests.Response:
     url = path if path.startswith("http") else f"{GRAPH_BASE_URL}{path}"
     resp = requests.get(url, headers=_auth_headers(), timeout=30, **kwargs)
-    resp.raise_for_status()
+    _raise_with_body(resp)
     return resp
 
 
 def graph_post(path: str, json: dict, **kwargs) -> requests.Response:
     url = path if path.startswith("http") else f"{GRAPH_BASE_URL}{path}"
     resp = requests.post(url, headers=_auth_headers(), json=json, timeout=30, **kwargs)
-    resp.raise_for_status()
+    _raise_with_body(resp)
     return resp
 
 
 def graph_patch(path: str, json: dict, **kwargs) -> requests.Response:
     url = path if path.startswith("http") else f"{GRAPH_BASE_URL}{path}"
     resp = requests.patch(url, headers=_auth_headers(), json=json, timeout=30, **kwargs)
-    resp.raise_for_status()
+    _raise_with_body(resp)
     return resp
 
 
 def graph_delete(path: str, **kwargs) -> requests.Response:
     url = path if path.startswith("http") else f"{GRAPH_BASE_URL}{path}"
     resp = requests.delete(url, headers=_auth_headers(), timeout=30, **kwargs)
-    resp.raise_for_status()
+    _raise_with_body(resp)
     return resp
