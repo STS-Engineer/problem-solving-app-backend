@@ -15,6 +15,7 @@ from app.api.routes.audit_priorities import router as priorities_router
 from app.api.routes.admin_router import router as admin_router
 from app.api.routes.email_intake import router as email_intake_router
 from app.api.routes.plant_contacts import router as plant_contacts_router
+from app.api.routes.graph_webhook import router as graph_webhook_router
 
 api_router = APIRouter()
 
@@ -40,4 +41,7 @@ api_router.include_router(
 )
 api_router.include_router(
     plant_contacts_router, prefix="/plant-contacts", tags=["plant-contacts"]
+)
+api_router.include_router(
+    graph_webhook_router, prefix="/graph/webhook", tags=["graph-webhook"]
 )

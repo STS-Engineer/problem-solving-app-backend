@@ -16,6 +16,8 @@ from sqlalchemy import text
 from app.db.session import SessionLocal
 from app.services.escalation_service import check_and_escalate_all, retry_failed_emails
 from app.services.intake_escalation_service import check_and_escalate_intakes
+from app.services.graph_client import is_configured as graph_is_configured
+from app.services.graph_subscription_service import renew_expiring_subscriptions
 
 logger = logging.getLogger(__name__)
 load_dotenv()
@@ -29,8 +31,12 @@ RETRY_INTERVAL_MINUTES = 10
 LOCK_ID_ESCALATION = 8_001
 LOCK_ID_EMAIL_RETRY = 8_002
 LOCK_ID_INTAKE_ESCALATION = 8_003
+LOCK_ID_GRAPH_RENEWAL = 8_004
 
 INTAKE_CHECK_INTERVAL_MINUTES = 3 if TEST_MODE else 30
+# Graph subscriptions expire in ~2.9 days; check often enough that a missed
+# run or two still leaves comfortable margin before expiry.
+GRAPH_RENEWAL_CHECK_INTERVAL_MINUTES = 30
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -117,6 +123,16 @@ def _run_intake_escalation_check() -> None:
     )
 
 
+def _run_graph_subscription_renewal() -> None:
+    if not graph_is_configured():
+        return  # internal Graph agent not configured — nothing to renew
+    _run_job(
+        LOCK_ID_GRAPH_RENEWAL,
+        renew_expiring_subscriptions,
+        "Graph mailbox subscription renewal",
+    )
+
+
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 
@@ -150,6 +166,13 @@ def start_scheduler() -> None:
         trigger=IntervalTrigger(minutes=INTAKE_CHECK_INTERVAL_MINUTES),
         id="intake_escalation_check",
         name="Email Intake (pre-complaint) Escalation Check",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _run_graph_subscription_renewal,
+        trigger=IntervalTrigger(minutes=GRAPH_RENEWAL_CHECK_INTERVAL_MINUTES),
+        id="graph_subscription_renewal",
+        name="Graph Mailbox Subscription Renewal",
         replace_existing=True,
     )
 

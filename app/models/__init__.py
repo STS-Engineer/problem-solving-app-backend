@@ -8,6 +8,7 @@ from .kb_chunk import KBChunk
 from .complaint_audit_log import ComplaintAuditLog
 from .plant_contacts import PlantContact
 from .email_intake import EmailIntake
+from .graph_subscription import GraphSubscription
 
 __all__ = [
     "User",
@@ -21,4 +22,5 @@ __all__ = [
     "ComplaintAuditLog",
     "PlantContact",
     "EmailIntake",
+    "GraphSubscription",
 ]

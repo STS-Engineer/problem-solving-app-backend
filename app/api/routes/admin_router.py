@@ -10,6 +10,15 @@ Admin / ops endpoints.
 
   GET  /api/v1/admin/scheduler-status
       Returns current APScheduler job list and next run times.
+
+  POST /api/v1/admin/graph/subscribe
+      One-time bootstrap: registers the Microsoft Graph change-notification
+      subscription on the shared claims mailbox (internal intake agent).
+      Re-run after changing GRAPH_MAILBOX_UPN/GRAPH_NOTIFICATION_URL, or if
+      the subscription was deleted/expired without the renewal job catching it.
+
+  GET  /api/v1/admin/graph/subscription-status
+      Shows the currently tracked subscription(s) and expiry.
 """
 
 from __future__ import annotations
@@ -18,9 +27,13 @@ import logging
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_db
+from app.models.graph_subscription import GraphSubscription
+from app.services.graph_client import is_configured as graph_is_configured
+from app.services.graph_subscription_service import create_subscription
 from app.services.kpi_report.kpi_email_service import _PLANT_HTML
 from app.services.kpi_report.kpi_report_pdf import per_plant_report
 
@@ -197,4 +210,66 @@ async def trigger_kpi_report(
         "is being generated and emailed.",
         "month": month,
         "year": year,
+    }
+
+
+@router.post(
+    "/graph/subscribe",
+    summary="One-time bootstrap: create the Graph mailbox-watch subscription",
+)
+def subscribe_graph_mailbox(db: Session = Depends(get_db)):
+    """
+    Registers a Microsoft Graph change-notification subscription so new mail
+    in GRAPH_MAILBOX_UPN's Inbox is pushed to GRAPH_NOTIFICATION_URL. Call
+    this once after deploying with the AZURE_*/GRAPH_* env vars set — the
+    scheduled renewal job keeps the subscription alive after that.
+    """
+    if not graph_is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Graph is not configured — set AZURE_TENANT_ID, AZURE_CLIENT_ID, "
+                "AZURE_CLIENT_SECRET and GRAPH_MAILBOX_UPN first."
+            ),
+        )
+    try:
+        sub = create_subscription(db)
+    except Exception as exc:
+        logger.exception("Failed to create Graph subscription")
+        raise HTTPException(status_code=502, detail=f"Graph rejected the subscription: {exc}")
+
+    return {
+        "status": "created",
+        "subscription_id": sub.subscription_id,
+        "resource": sub.resource,
+        "expires_at": sub.expires_at.isoformat(),
+    }
+
+
+@router.get(
+    "/graph/subscription-status",
+    summary="Show tracked Graph mailbox subscription(s)",
+)
+def graph_subscription_status(db: Session = Depends(get_db)):
+    rows = (
+        db.query(GraphSubscription)
+        .order_by(GraphSubscription.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    return {
+        "graph_configured": graph_is_configured(),
+        "subscriptions": [
+            {
+                "subscription_id": r.subscription_id,
+                "resource": r.resource,
+                "status": r.status,
+                "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+                "last_renewed_at": r.last_renewed_at.isoformat()
+                if r.last_renewed_at
+                else None,
+                "last_error": r.last_error,
+            }
+            for r in rows
+        ],
     }
