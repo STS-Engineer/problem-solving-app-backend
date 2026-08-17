@@ -28,6 +28,7 @@ from app.api.deps import get_db
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.graph_subscription import GraphSubscription
+from app.services.graph_email_fetch_service import fetch_message, fetch_message_attachments
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -90,11 +91,13 @@ def _is_known_client_state(db: Session, client_state: str | None) -> bool:
 
 def _handle_notification(subscription_id: str | None, message_id: str) -> None:
     """
-    Placeholder hook: fetch the message via Graph (task 2 — internal
-    email-fetch service), run classification/extraction (task 3 — internal
-    LLM service), then call EmailIntakeService.ingest directly (task 4).
-    Logged-only for now so the webhook plumbing can be verified end-to-end
-    before the rest of the pipeline lands.
+    Fetches the message + attachments via Graph (task 2 — internal
+    email-fetch service) and logs what was found. Classification/extraction
+    (task 3) and actually calling EmailIntakeService.ingest (task 4) are not
+    wired in yet — deliberately: the mailbox is never mutated (no
+    mark-as-read, no move-to-Processed) from this fetch-only step, so
+    nothing is filed away as handled before it's actually turned into an
+    intake. That happens only once Task 4 lands.
 
     Also stamps a breadcrumb (last_notification_at/message_id, a running
     count) onto the GraphSubscription row so "did a notification arrive?"
@@ -102,11 +105,25 @@ def _handle_notification(subscription_id: str | None, message_id: str) -> None:
     Runs in a background task (after the HTTP response is sent), so it opens
     its own DB session rather than reusing the request-scoped one.
     """
-    logger.info(
-        "Graph webhook: new message %s on subscription %s — fetch/classify/ingest not wired yet",
-        message_id,
-        subscription_id,
-    )
+    try:
+        message = fetch_message(message_id)
+        attachments = fetch_message_attachments(message_id) if message["has_attachments"] else []
+        logger.info(
+            "Graph webhook: fetched message %s (subscription %s) — subject=%r "
+            "from=%r conversation_id=%s attachments=%d — classify/extract/ingest not wired yet",
+            message_id,
+            subscription_id,
+            message.get("subject"),
+            message.get("sender_email"),
+            message.get("conversation_id"),
+            len(attachments),
+        )
+    except Exception:
+        logger.exception(
+            "Graph webhook: failed to fetch message %s (subscription %s)",
+            message_id,
+            subscription_id,
+        )
 
     db = SessionLocal()
     try:
