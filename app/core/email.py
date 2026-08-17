@@ -16,6 +16,12 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "25"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASSWORD", "")
 
+# Set EMAIL_DRY_RUN=true (e.g. in a test/.env) to skip the real SMTP send —
+# logs what WOULD have been sent instead. Leave unset/false in production.
+# Lets QA scripts (e.g. test_email_intake_followup_flow.py) exercise the full
+# intake/notification code path without emailing real plant contacts.
+EMAIL_DRY_RUN = os.getenv("EMAIL_DRY_RUN", "false").strip().lower() == "true"
+
 
 def _send_sync(
     subject: str,
@@ -36,6 +42,14 @@ def _send_sync(
     msg.attach(MIMEText(body_html, "html"))
 
     all_recipients = recipients + (cc or [])
+
+    if EMAIL_DRY_RUN:
+        logger.info(
+            "EMAIL_DRY_RUN — NOT actually sending. Would have sent subject=%r to=%s",
+            subject,
+            all_recipients,
+        )
+        return
 
     logger.debug(
         "SMTP send: host=%s port=%s user=%r to=%s",

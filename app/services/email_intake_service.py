@@ -231,6 +231,77 @@ def _notify(intake: EmailIntake, recipients: list[str]) -> None:
         logger.warning("intake %s: notification failed: %s", intake.id, exc)
 
 
+def _build_followup_notification(
+    intake: EmailIntake, reference: Optional[str]
+) -> tuple[str, str]:
+    ref_label = reference or f"#{intake.id}"
+    if reference:
+        url = f"{settings.INTAKE_REVIEW_BASE_URL.rstrip('/')}/8d/{reference}/D1"
+        status_line = "already promoted to a complaint"
+    else:
+        url = f"{settings.INTAKE_REVIEW_BASE_URL.rstrip('/')}/intake/{intake.id}"
+        status_line = "still pending review"
+
+    subject = f"[AVOCarbon] Customer replied — {ref_label}"
+    body_html = f"""
+    <div style="font-family:Inter,Arial,sans-serif;max-width:620px;margin:0 auto;
+                background:#f9fafb;padding:28px;border-radius:10px;">
+      <div style="background:#fff;border-radius:8px;padding:26px;
+                  border-left:4px solid #E8710A;box-shadow:0 2px 8px rgba(0,0,0,0.07);">
+        <h2 style="margin:0 0 4px;color:#1A2332;font-size:18px;">Customer replied to an existing complaint email</h2>
+        <p style="margin:0 0 18px;color:#8A95A8;font-size:13px;">Intake {ref_label} — {status_line}</p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;color:#4A5568;">
+          <tr><td style="padding:6px 0;font-weight:700;color:#1A2332;width:38%;">From</td>
+              <td style="padding:6px 0;">{intake.sender_name or ''} &lt;{intake.sender_email or '—'}&gt;</td></tr>
+          <tr><td style="padding:6px 0;font-weight:700;color:#1A2332;">Subject</td>
+              <td style="padding:6px 0;">{intake.subject or '—'}</td></tr>
+        </table>
+        <div style="margin:22px 0 6px;">
+          <a href="{url}"
+             style="display:inline-block;background:#E8710A;color:#fff;text-decoration:none;
+                    padding:11px 22px;border-radius:6px;font-size:14px;font-weight:600;">
+            Open
+          </a>
+        </div>
+      </div>
+    </div>
+    """
+    return subject, body_html
+
+
+def _notify_followup(db: Session, intake: EmailIntake) -> None:
+    """
+    A customer reply doesn't create a new intake row, so it never goes
+    through `_notify()` — without this, nobody is told a reply arrived.
+    Notify whoever currently owns the thread: the assigned CQT once
+    promoted, otherwise the same recipients as the original triage notice.
+    """
+    reference = None
+    if intake.complaint_id:
+        recipients = [intake.assigned_cqe_email] if intake.assigned_cqe_email else []
+        if not recipients:
+            recipients = _resolve_recipients(db, intake.detected_plant)
+        reference = intake.complaint.reference_number if intake.complaint else None
+    else:
+        recipients = list(intake.notified_to or []) or _resolve_recipients(
+            db, intake.detected_plant
+        )
+
+    if not recipients:
+        logger.error(
+            "intake %s: follow-up received but no recipients resolved — notification skipped",
+            intake.id,
+        )
+        return
+
+    subject, body_html = _build_followup_notification(intake, reference)
+    try:
+        _send_sync(subject=subject, recipients=recipients, body_html=body_html, cc=None)
+        logger.info("intake %s: follow-up notified %s", intake.id, recipients)
+    except Exception as exc:  # best-effort — the follow-up is already stored
+        logger.warning("intake %s: follow-up notification failed: %s", intake.id, exc)
+
+
 # ── Public entry point ──────────────────────────────────────────────────────
 
 
@@ -268,6 +339,26 @@ class EmailIntakeService:
                 .first()
             )
             if thread:
+                # Download/store any attachments on the reply itself — these
+                # used to be silently dropped (only subject/raw_body were
+                # kept). File rows are tagged with the SAME intake_id as the
+                # original email, same as a first-contact attachment.
+                followup_attachments: list[dict] = []
+                if payload.attachments:
+                    try:
+                        followup_attachments = process_intake_attachments(
+                            db, thread.id, [a.model_dump() for a in payload.attachments]
+                        )
+                        db.commit()
+                    except Exception as exc:
+                        logger.warning(
+                            "intake %s: follow-up attachment processing failed: %s",
+                            thread.id,
+                            exc,
+                        )
+                        db.rollback()
+                        followup_attachments = []
+
                 followups = list(thread.attachments or [])
                 followups.append(
                     {
@@ -278,12 +369,25 @@ class EmailIntakeService:
                         if payload.received_at
                         else None,
                         "raw_body": payload.raw_body,
+                        "attachments": followup_attachments,
                     }
                 )
                 thread.attachments = followups
                 thread.updated_at = datetime.now(timezone.utc)
                 db.commit()
                 db.refresh(thread)
+
+                # Thread was already promoted before this reply arrived —
+                # the new File rows above aren't linked to the complaint yet
+                # (link_intake_files_to_complaint only ran once, at promote
+                # time), so re-run it now to pick up the reply's attachments.
+                if thread.complaint_id:
+                    link_intake_files_to_complaint(db, thread.id, thread.complaint_id)
+
+                # A reply used to be stored silently with nobody told about
+                # it — notify whoever currently owns the thread.
+                _notify_followup(db, thread)
+
                 logger.info(
                     "intake: follow-up on conversation %s attached to intake %s",
                     payload.conversation_id,
