@@ -20,10 +20,10 @@ This file is appended to as each task lands — one section per task, in order.
 
 1. **Microsoft Graph mailbox subscription setup** — ✅ **DONE** (2026-08-14) — live subscription created and verified end-to-end
 2. **Internal email-fetch service** — ✅ **DONE** (2026-08-17) — fetches real messages + attachments, verified against a live mailbox message
-3. Internal LLM classification & extraction service — not started (next up)
-4. Wire internal pipeline into existing intake flow — not started
-5. Error handling & observability — not started
-6. Testing & cutover — not started
+3. **Internal LLM classification & extraction service** — ✅ **DONE** (2026-08-17) — verified against a real skip case and a synthetic complaint email
+4. **Wire internal pipeline into existing intake flow** — ✅ **DONE** (2026-08-17) — full fetch→classify→ingest loop verified end-to-end against the test DB
+5. Error handling & observability — not started (next up — current error handling is best-effort logging only, no alerting/retry)
+6. Testing & cutover — not started (this is where the external agent gets retired)
 
 ---
 
@@ -306,6 +306,135 @@ read or move it) and prints subject/sender/conversation_id/attachment count
   `EmailIntakeService.ingest()` — the follow-up/threading logic already
   exists and needs no new work (see "Client replies" below), it just needs
   `conversation_id` populated correctly by this fetch step.
+
+---
+
+## Task 3 — Internal LLM classification & extraction service
+
+**Goal:** replace what the external agent's system prompt
+(`docs/intake-agent-prompt.md`) does inside the ChatGPT/Outlook connector
+with an internal OpenAI call, using the same controlled vocabularies and
+extraction rules.
+
+### What was built
+
+`app/services/graph_email_classify_service.py::classify_and_extract()` —
+one-shot call to `settings.OPENAI_MODEL`. The prompt pulls
+`CLAIM_TYPES`/`PRODUCT_LINES`/`DEFECTS`/`PLANTS`/`PROCESSES`/`CUSTOMERS`
+**directly from `app.core.form_options`** (not copy-pasted) so it can never
+drift from what `evaluate_completeness()` validates at promote time. Returns
+`is_complaint`, `extracted_data`, `detected_plant`, `missing_fields`,
+`ai_notes` — same shape `EmailIntakeCreate` expects. Never raises — any
+OpenAI/parsing failure returns a safe `is_complaint=False` default so a bad
+LLM response can't take down the webhook's background task (logged loudly
+instead, since silently skipping a real complaint would be worse than a
+false positive needing human correction).
+
+### Known limitation
+
+Attachment **content** is not analyzed (the external agent reads PDFs/Excel
+files and extracts data buried inside them per `docs/intake-agent-prompt.md`'s
+"PIÈCES JOINTES" section — e.g. "body empty, PDF has everything"). Only
+filenames are passed as context to the LLM. If this mailbox regularly
+receives complaints where the substance is only in an attachment, this will
+under-extract compared to the external agent. Revisit if that turns out to
+matter in practice.
+
+### How to test
+
+Verified two ways on 2026-08-17:
+- Real mailbox message → correctly classified an internal test email as
+  `is_complaint: false` with an accurate `skip_reason`.
+- Synthetic complaint text → correctly extracted `customer: BOSCH`,
+  `product_line: CHOKE`, `defects: Dimensional`,
+  `potential_avocarbon_process_linked_to_problem: PLASTIC INJECTION`,
+  `avocarbon_plant`/`detected_plant: POITIERS` — all exact controlled-vocab
+  matches, plus correctly flagged genuinely-missing fields
+  (`customer_plant_name`, `quality_issue_warranty`) rather than guessing.
+
+```python
+from app.services.graph_email_classify_service import classify_and_extract
+result = classify_and_extract(subject=..., sender_email=..., sender_name=...,
+                               raw_body=..., raw_html=None, attachments=[])
+```
+
+---
+
+## Task 4 — Wire internal pipeline into existing intake flow
+
+**Goal:** connect Tasks 1-3 into one path: webhook notification → fetch →
+classify/extract → `EmailIntakeService.ingest()` — no external MCP hop.
+
+### What was built
+
+`app/services/internal_intake_pipeline.py::handle_new_message(db, message_id, mutate_mailbox=True)`
+— the single entry point `graph_webhook.py`'s `_handle_notification` now
+calls instead of just fetching-and-logging:
+1. `fetch_message` + `fetch_message_attachments` (Task 2)
+2. `classify_and_extract` (Task 3)
+3. Not a complaint → mark read + move to Processed, stop (a legitimate
+   terminal state, not a failure — see the note below on why this differs
+   from Task 2's original "never mutate" stance)
+4. Is a complaint → build `EmailIntakeCreate` (attachments deliberately
+   empty here — see next point) → `EmailIntakeService.ingest()`
+5. Real attachment bytes are stored **separately**, via the new
+   `intake_attachments.store_fetched_attachments()` (added this task) —
+   resolves the open question from Task 2: `process_intake_attachments()`
+   still only handles the external agent's `download_url` shape unchanged;
+   `store_fetched_attachments()` is the bytes-accepting sibling for
+   Graph-fetched content, sharing the same underlying blob-upload/File-row
+   helper (`_store_bytes`, factored out of the existing function — verified
+   no regression by re-running `test_email_intake_followup_flow.py`).
+6. Attachment metadata is merged into the intake row correctly for both
+   the fresh-create case and the reply/`attached_to_existing` case (finds
+   the matching `followup_email` entry and fills in its `attachments` list),
+   including linking to the complaint if the thread was already promoted —
+   same logic Task 2's reply-handling fix already established.
+7. Only on success (`ingest()` returned, attachments stored) → mark the
+   message read + move to Processed.
+
+### Refinement to Task 2's "never mutate" decision
+
+Task 2 said the mailbox is never touched until the full pipeline succeeds.
+With classify/extract now in place, "succeeds" is refined to: **either** a
+genuine complaint was successfully ingested, **or** the email was correctly
+classified as not a complaint (spam/internal/newsletter/etc. — a real,
+intentional terminal outcome, not a bug). Only an actual exception
+(Graph/DB/OpenAI error) leaves the message untouched for retry/triage.
+
+### mutate_mailbox parameter — for safe testing
+
+`handle_new_message(..., mutate_mailbox=False)` skips the mark-read/move
+step entirely. Used by manual testing against the real mailbox's real
+message content without ever filing a real email away — see
+`test_internal_pipeline_manual.py`.
+
+### How to test
+
+```bash
+python test_internal_pipeline_manual.py
+```
+Fetches the real top Inbox message, runs the full pipeline against
+`problem-solving-8d-db` (refuses to run if `DATABASE_URL` isn't that test
+DB), `mutate_mailbox=False`. Verified 2026-08-17 — correctly classified a
+real internal message and skipped without touching the mailbox.
+
+For the ingest/attachment/notification side specifically, reuse
+`test_email_intake_followup_flow.py` (both scenarios still PASS after this
+task's `intake_attachments.py` refactor — confirmed no regression).
+
+### Known limitations / not yet done
+
+- No end-to-end test yet with a **real customer complaint email** landing
+  in the mailbox and flowing all the way through to a created `EmailIntake`
+  row via the live webhook — only tested via direct pipeline calls against
+  the test DB. Recommended next step: send one real test complaint-shaped
+  email to the mailbox (once deployed) and confirm an intake row appears.
+- Error handling is best-effort logging only — no alerting if OpenAI is
+  down, no retry queue for a failed Graph fetch. That's Task 5.
+- The external agent path (`/intake/email`, `docs/mcp-intake-openapi.json`)
+  is untouched and still fully functional in parallel — cutover (disabling
+  it) is Task 6, deliberately not done yet.
 
 ### Client replies (found + fixed during Task 1 review, 2026-08-14)
 
