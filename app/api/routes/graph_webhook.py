@@ -11,9 +11,9 @@ agent's polling). Two responsibilities only:
    actual fetch/classify/extract/ingest work to a background task so this
    endpoint can ack within Graph's timeout.
 
-The actual email-fetch + LLM classification/extraction (tasks 2 & 3 of the
-internal-agent migration) are not implemented here yet — `_handle_notification`
-is a placeholder hook for that work.
+The full fetch → classify → extract → ingest pipeline (tasks 2-4 of the
+internal-agent migration) runs in `_handle_notification`, delegated to
+app.services.internal_intake_pipeline.handle_new_message.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from app.api.deps import get_db
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.graph_subscription import GraphSubscription
+from app.services.internal_intake_pipeline import handle_new_message
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -90,25 +91,38 @@ def _is_known_client_state(db: Session, client_state: str | None) -> bool:
 
 def _handle_notification(subscription_id: str | None, message_id: str) -> None:
     """
-    Placeholder hook: fetch the message via Graph (task 2 — internal
-    email-fetch service), run classification/extraction (task 3 — internal
-    LLM service), then call EmailIntakeService.ingest directly (task 4).
-    Logged-only for now so the webhook plumbing can be verified end-to-end
-    before the rest of the pipeline lands.
+    Runs the full fetch -> classify -> extract -> ingest pipeline (tasks
+    2-4) for one message id. Runs in a background task (after the HTTP
+    response is sent), so it opens its own DB session rather than reusing
+    the request-scoped one.
+
+    A failure here (Graph API error, OpenAI error, bad data) is logged but
+    never raised further — per handle_new_message's contract, the message
+    is simply left unread/in Inbox for manual triage or a future retry;
+    nothing is filed away as "handled" when it wasn't.
 
     Also stamps a breadcrumb (last_notification_at/message_id, a running
     count) onto the GraphSubscription row so "did a notification arrive?"
     can be checked via the DB / admin status endpoint instead of only logs.
-    Runs in a background task (after the HTTP response is sent), so it opens
-    its own DB session rather than reusing the request-scoped one.
     """
-    logger.info(
-        "Graph webhook: new message %s on subscription %s — fetch/classify/ingest not wired yet",
-        message_id,
-        subscription_id,
-    )
-
     db = SessionLocal()
+    try:
+        result = handle_new_message(db, message_id)
+        logger.info(
+            "Graph webhook: message %s (subscription %s) -> %s",
+            message_id,
+            subscription_id,
+            result,
+        )
+    except Exception:
+        logger.exception(
+            "Graph webhook: pipeline failed for message %s (subscription %s) — "
+            "left unread/in Inbox for retry",
+            message_id,
+            subscription_id,
+        )
+        db.rollback()
+
     try:
         query = db.query(GraphSubscription)
         sub = (

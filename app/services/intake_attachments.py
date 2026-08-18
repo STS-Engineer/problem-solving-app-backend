@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import requests
 from sqlalchemy.orm import Session
@@ -109,62 +109,122 @@ def process_intake_attachments(
         meta["sha256"] = actual
 
         # 3. Upload to Blob + create File row
-        try:
-            uploaded = blob_storage.upload_bytes(
-                content=content,
-                original_name=filename,
-                folder=f"intake/{intake_id}",
-                prefix=f"intake_{intake_id}",
-                mime_type=item.get("mime_type"),
-            )
-        except Exception as exc:
-            meta["status"] = "rejected"
-            meta["error"] = str(getattr(exc, "detail", exc))[:300]
+        stored_meta = _store_bytes(db, intake_id, filename, content, item.get("mime_type"), meta)
+        results.append(stored_meta)
+
+    return results
+
+
+def _store_bytes(
+    db: Session,
+    intake_id: int,
+    filename: str,
+    content: bytes,
+    mime_type: Optional[str],
+    meta: dict,
+) -> dict:
+    """
+    Shared "upload to Blob + create File row" step, used both by the
+    download-based path above (external agent's download_url) and by
+    store_fetched_attachments() below (internal agent's Graph-fetched
+    bytes). `meta` is the in-progress metadata dict for this attachment —
+    mutated in place and returned.
+    """
+    try:
+        uploaded = blob_storage.upload_bytes(
+            content=content,
+            original_name=filename,
+            folder=f"intake/{intake_id}",
+            prefix=f"intake_{intake_id}",
+            mime_type=mime_type,
+        )
+    except Exception as exc:
+        meta["status"] = "rejected"
+        meta["error"] = str(getattr(exc, "detail", exc))[:300]
+        logger.warning(
+            "intake %s: attachment %r rejected on upload: %s", intake_id, filename, exc
+        )
+        return meta
+
+    file_row = File(
+        purpose="evidence",
+        original_name=uploaded["filename"],
+        stored_path=uploaded["blob_name"],
+        size_bytes=uploaded["size"],
+        mime_type=uploaded["mimetype"],
+        uploaded_by=None,
+        source="email_intake",
+        intake_id=intake_id,
+        description=meta.get("description"),
+        checksum=meta.get("sha256"),
+    )
+    db.add(file_row)
+    db.flush()  # get file_row.id
+
+    meta.update(
+        {
+            "status": "stored",
+            "file_id": file_row.id,
+            "blob_name": uploaded["blob_name"],
+            "url": uploaded["file_url"],  # inline: preview in browser
+            "download_url": blob_storage.get_blob_download_url(
+                uploaded["blob_name"], uploaded["filename"]
+            ),  # forces a download
+            "mime_type": uploaded["mimetype"],
+            "size": uploaded["size"],
+        }
+    )
+    logger.info(
+        "intake %s: stored attachment %r (file_id=%s, %d bytes)",
+        intake_id,
+        filename,
+        file_row.id,
+        uploaded["size"],
+    )
+    return meta
+
+
+def store_fetched_attachments(
+    db: Session, intake_id: int, fetched: list[dict[str, Any]]
+) -> list[dict]:
+    """
+    Stores attachments already fetched (with content in hand) by
+    app.services.graph_email_fetch_service.fetch_message_attachments() —
+    the internal agent's path. Unlike process_intake_attachments(), there is
+    no download step: Graph attachment content needs our own bearer token,
+    so fetch_message_attachments() already downloaded it via an
+    authenticated call and handed us the bytes directly.
+
+    `fetched` items have status in {"fetched", "too_large", "unsupported_type"}
+    (see fetch_message_attachments' docstring). Only "fetched" ones (with a
+    `content_bytes` key) get uploaded; the others are passed through as
+    metadata-only entries so nothing disappears without a trace, same
+    philosophy as process_intake_attachments().
+    """
+    results: list[dict] = []
+    for item in fetched or []:
+        meta = {
+            "filename": item.get("filename") or "file",
+            "mime_type": item.get("mime_type"),
+            "size": item.get("size"),
+            "description": item.get("description"),
+            "is_inline": bool(item.get("is_inline")),
+            "content_id": item.get("content_id"),
+            "sha256": item.get("sha256"),
+        }
+
+        if meta["is_inline"]:
+            meta["status"] = "skipped_inline"
             results.append(meta)
-            logger.warning(
-                "intake %s: attachment %r rejected on upload: %s",
-                intake_id,
-                filename,
-                exc,
-            )
             continue
 
-        file_row = File(
-            purpose="evidence",
-            original_name=uploaded["filename"],
-            stored_path=uploaded["blob_name"],
-            size_bytes=uploaded["size"],
-            mime_type=uploaded["mimetype"],
-            uploaded_by=None,
-            source="email_intake",
-            intake_id=intake_id,
-            description=meta.get("description"),
-            checksum=actual,
-        )
-        db.add(file_row)
-        db.flush()  # get file_row.id
+        content = item.get("content_bytes")
+        if item.get("status") != "fetched" or not content:
+            meta["status"] = item.get("status", "no_source")
+            results.append(meta)
+            continue
 
-        meta.update(
-            {
-                "status": "stored",
-                "file_id": file_row.id,
-                "blob_name": uploaded["blob_name"],
-                "url": uploaded["file_url"],  # inline: preview in browser
-                "download_url": blob_storage.get_blob_download_url(
-                    uploaded["blob_name"], uploaded["filename"]
-                ),  # forces a download
-                "mime_type": uploaded["mimetype"],
-                "size": uploaded["size"],
-            }
-        )
-        results.append(meta)
-        logger.info(
-            "intake %s: stored attachment %r (file_id=%s, %d bytes)",
-            intake_id,
-            filename,
-            file_row.id,
-            uploaded["size"],
-        )
+        results.append(_store_bytes(db, intake_id, meta["filename"], content, meta["mime_type"], meta))
 
     return results
 

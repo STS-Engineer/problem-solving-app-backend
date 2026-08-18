@@ -118,8 +118,46 @@ def check_mailbox_access() -> bool:
     return True
 
 
+def check_fetch_real_message() -> bool:
+    step(4, "Fetch a real message via the Task 2 fetch service (read-only)")
+    from app.core.config import settings
+    from app.services.graph_client import graph_get
+    from app.services.graph_email_fetch_service import fetch_message, fetch_message_attachments
+
+    try:
+        top1 = graph_get(
+            f"/users/{settings.GRAPH_MAILBOX_UPN}/mailFolders/Inbox/messages",
+            params={"$top": 1, "$select": "id"},
+        ).json().get("value", [])
+    except Exception as exc:
+        fail(f"Could not list Inbox to find a message to fetch: {exc}")
+        return False
+
+    if not top1:
+        print("  (Inbox is empty — nothing to fetch. Not a failure, just nothing to test.)")
+        return True
+
+    message_id = top1[0]["id"]
+    try:
+        message = fetch_message(message_id)
+        attachments = fetch_message_attachments(message_id) if message["has_attachments"] else []
+    except Exception as exc:
+        fail(f"fetch_message/fetch_message_attachments failed: {exc}")
+        return False
+
+    ok(
+        f"Fetched message — subject={message.get('subject')!r}, "
+        f"from={message.get('sender_email')!r}, conversation_id={message.get('conversation_id')}, "
+        f"attachments={len(attachments)}"
+    )
+    for a in attachments:
+        print(f"    - {a.get('filename')} ({a.get('mime_type')}, {a.get('size')} bytes) status={a.get('status')}")
+    print("  (Read-only — this did NOT mark the message read or move it.)")
+    return True
+
+
 def check_webhook_validation_handshake(base_url: str) -> bool:
-    step(4, f"Local webhook validation handshake ({base_url})")
+    step(5, f"Local webhook validation handshake ({base_url})")
     token = secrets.token_hex(8)
     url = f"{base_url}/api/v1/graph/webhook/mailbox"
     try:
@@ -136,7 +174,7 @@ def check_webhook_validation_handshake(base_url: str) -> bool:
 
 
 def check_webhook_notification(base_url: str) -> bool:
-    step(5, f"Local webhook notification handling ({base_url})")
+    step(6, f"Local webhook notification handling ({base_url})")
     from app.core.config import settings
 
     url = f"{base_url}/api/v1/graph/webhook/mailbox"
@@ -180,7 +218,7 @@ def check_webhook_notification(base_url: str) -> bool:
 
 
 def do_subscribe(base_url: str) -> bool:
-    step(6, f"Create real Graph subscription via admin endpoint ({base_url})")
+    step(7, f"Create real Graph subscription via admin endpoint ({base_url})")
     url = f"{base_url}/api/v1/admin/graph/subscribe"
     try:
         resp = requests.post(url, timeout=30)
@@ -215,6 +253,8 @@ def main() -> int:
         "token": check_token(),
         "mailbox_access": check_mailbox_access(),
     }
+    if results["mailbox_access"]:
+        results["fetch_real_message"] = check_fetch_real_message()
 
     if args.base_url:
         results["webhook_handshake"] = check_webhook_validation_handshake(args.base_url)
@@ -222,7 +262,7 @@ def main() -> int:
         if args.subscribe:
             results["subscribe"] = do_subscribe(args.base_url)
     else:
-        print("\n(Skipping steps 4-6 — pass --base-url to run them.)")
+        print("\n(Skipping steps 5-7 — pass --base-url to run them.)")
 
     print("\n=== Summary ===")
     for k, v in results.items():
