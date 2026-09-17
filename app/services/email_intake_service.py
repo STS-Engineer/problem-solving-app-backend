@@ -369,6 +369,7 @@ class EmailIntakeService:
                         if payload.received_at
                         else None,
                         "raw_body": payload.raw_body,
+                        "raw_html": payload.raw_html,
                         "attachments": followup_attachments,
                     }
                 )
