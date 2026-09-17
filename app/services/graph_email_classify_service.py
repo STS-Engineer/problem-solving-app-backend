@@ -23,6 +23,7 @@ from openai import OpenAI, OpenAIError
 
 from app.core.config import settings
 from app.core.form_options import CLAIM_TYPES, CUSTOMERS, DEFECTS, PLANTS, PROCESSES, PRODUCT_LINES
+from app.services.attachment_content_extractor import build_attachment_context
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +50,15 @@ thank-you/acknowledgement replies with no new complaint content. Put a short
 reason in skip_reason when is_complaint=false.
 
 ## STEP 2 — EXTRACT (only if is_complaint=true)
-Read the whole email (subject + body). NEVER invent data — if a field is not
-stated or clearly implied, leave it "" (empty string). If the subject and
-body conflict, follow the body and note the discrepancy in ai_notes.
+Read the whole email: subject, body, AND any attachments provided below —
+extracted PDF/Excel text is included as text blocks, and images (photos of
+defective parts, screenshots) are attached directly for you to look at.
+NEVER invent data — if a field is not stated or clearly implied, leave it ""
+(empty string). If the subject and body conflict, follow the body and note
+the discrepancy in ai_notes. If the email body is empty or minimal and the
+actual complaint details are in an attachment (e.g. "see attached report"
+with a PDF containing everything), extract from the attachment content —
+treat it exactly as if it came from the email body.
 
 CONTROLLED VALUES — output EXACTLY one of these (map synonyms yourself,
 e.g. "Robert Bosch GmbH" -> "BOSCH"); if none fits, leave the field EMPTY:
@@ -136,32 +143,49 @@ def classify_and_extract(
       missing_fields : list[str]
       ai_notes : str
 
-    On any failure (OpenAI error, bad JSON), returns a safe default with
-    is_complaint=False and skip_reason="classification_failed" — never
-    raises, so a bad LLM response can't take down the webhook's background
-    task. Failures are logged loudly since silently skipping a real
-    complaint is worse than a false positive.
+    On any failure (OpenAI error, bad JSON) returns
+    classification_error=True + is_complaint=False — the two are NOT the
+    same thing (see the note on classification_error below); never raises,
+    so a bad LLM response can't crash the webhook's background task.
 
-    Note: attachment CONTENT is not analyzed here (the external agent reads
-    PDFs/Excels to extract data hidden in attachments — not replicated yet).
-    Only filenames/descriptions are passed as context. Known limitation —
-    see docs/internal-intake-agent-migration.md Task 3.
+    Attachment content IS analyzed: PDF/Excel text is extracted server-side
+    (app.services.attachment_content_extractor) and included in the prompt;
+    images are attached directly as multimodal content for the model to
+    look at. Word docs and other unhandled types still fall back to
+    filename-only context.
     """
     body = raw_body or (_html_to_text(raw_html) if raw_html else "") or "(empty body)"
     attachment_summary = (
         ", ".join(a.get("filename", "file") for a in (attachments or [])) or "none"
     )
+    attachment_text, image_parts = build_attachment_context(attachments or [])
 
-    user_msg = _USER_TEMPLATE.format(
+    user_text = _USER_TEMPLATE.format(
         sender_name=sender_name or "",
         sender_email=sender_email or "",
         subject=subject or "",
         attachment_summary=attachment_summary,
         body=body[:8000],  # keep token usage bounded on very long threads
     )
+    if attachment_text:
+        user_text += f"\n\n=== ATTACHMENT CONTENT ===\n{attachment_text}"
 
+    # Vision-capable models accept a list of content parts (text + images)
+    # instead of a plain string — only switch to that shape when there are
+    # images to attach, keeping the plain-string case simple/unchanged.
+    user_msg = [{"type": "text", "text": user_text}, *image_parts] if image_parts else user_text
+
+    # NOTE: classification_error=True is NOT the same thing as a legitimate
+    # "this isn't a complaint" decision. A technical failure (OpenAI down,
+    # malformed JSON) must NEVER be treated as "confirmed not a complaint" —
+    # doing so would silently mark-read/move-to-Processed a real complaint
+    # that simply hit a transient error, permanently losing it. Callers
+    # (internal_intake_pipeline.handle_new_message) MUST check this flag and
+    # treat it like any other pipeline exception: leave the message
+    # untouched in Inbox for retry, never file it away.
     default_failure = {
         "is_complaint": False,
+        "classification_error": True,
         "skip_reason": "classification_failed",
         "extracted_data": {},
         "detected_plant": None,
@@ -194,6 +218,7 @@ def classify_and_extract(
         logger.error("classify_and_extract: unexpected error: %s", exc)
         return default_failure
 
+    result["classification_error"] = False
     result["extracted_data"] = _drop_empty_strings(result.get("extracted_data") or {})
     result["detected_plant"] = result.get("detected_plant") or None
     result["missing_fields"] = result.get("missing_fields") or []

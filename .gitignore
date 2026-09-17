@@ -27,5 +27,9 @@ sync_monday_to_db.py
 complaint.html
 
 complaints_data.json
+complaints_data_full.json
+complaints_data_v1.json
+monday_exports/
+monday_exports_test/
 
 pyproject.toml

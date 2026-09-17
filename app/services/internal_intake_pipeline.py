@@ -106,6 +106,17 @@ def handle_new_message(db: Session, message_id: str, *, mutate_mailbox: bool = T
         attachments=attachments,
     )
 
+    if result.get("classification_error"):
+        # A TECHNICAL failure (OpenAI down, malformed JSON) is NOT the same
+        # as a confirmed "not a complaint" decision — treating it as one
+        # would silently file away a real complaint that happened to hit a
+        # transient error. Raise so this behaves exactly like any other
+        # pipeline exception: message stays unread/in Inbox for retry.
+        raise RuntimeError(
+            f"classification failed for message {message_id} — "
+            "leaving unread for retry, NOT treating as a confirmed skip"
+        )
+
     if not result["is_complaint"]:
         logger.info(
             "internal_intake: message %s classified as NOT a complaint (%s) — skipping",

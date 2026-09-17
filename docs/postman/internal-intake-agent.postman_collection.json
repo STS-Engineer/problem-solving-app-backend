@@ -1,0 +1,118 @@
+{
+  "info": {
+    "name": "Internal Intake Agent - Graph Webhook (Task 1)",
+    "description": "Requests to test the Microsoft Graph mailbox-subscription webhook (validation handshake + notification handling) and the admin bootstrap/status endpoints. Set the `baseUrl` collection variable to your local dev server (e.g. http://localhost:8000) or production (https://complaint-back.azurewebsites.net) depending on what you're testing.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" },
+    { "key": "clientState", "value": "PUT_YOUR_GRAPH_WEBHOOK_CLIENT_STATE_HERE" }
+  ],
+  "item": [
+    {
+      "name": "1. Webhook validation handshake",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/graph/webhook/mailbox?validationToken=hello123",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "graph", "webhook", "mailbox"],
+          "query": [{ "key": "validationToken", "value": "hello123" }]
+        },
+        "description": "Simulates the handshake Graph performs when a subscription is created/renewed. Expected: 200 OK, body is exactly 'hello123', Content-Type: text/plain."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('Body echoes token', () => pm.expect(pm.response.text()).to.eql('hello123'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Notification - matching clientState",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/graph/webhook/mailbox",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "graph", "webhook", "mailbox"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"value\": [\n    {\n      \"subscriptionId\": \"test-sub-id\",\n      \"clientState\": \"{{clientState}}\",\n      \"resourceData\": { \"id\": \"test-message-id-123\" }\n    }\n  ]\n}"
+        },
+        "description": "Simulates a real Graph new-mail notification. Expected: 202 Accepted. Check server logs for 'new message test-message-id-123' — actual fetch/classify/ingest isn't wired yet (task 2/3), this only proves routing + clientState validation work."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 202', () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Notification - wrong clientState (should be dropped)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/graph/webhook/mailbox",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "graph", "webhook", "mailbox"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"value\": [\n    {\n      \"subscriptionId\": \"test-sub-id\",\n      \"clientState\": \"totally-wrong-value\",\n      \"resourceData\": { \"id\": \"test-message-id-456\" }\n    }\n  ]\n}"
+        },
+        "description": "Expected: still 202 overall (Graph shouldn't get an error and retry-storm you), but check server logs for 'unrecognized clientState — dropping notification' and confirm NO 'new message' log line appears for this one."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 202 (silently dropped, not an error)', () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Admin - create Graph subscription (bootstrap)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/admin/graph/subscribe",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "admin", "graph", "subscribe"]
+        },
+        "description": "ONE-TIME action. Only run this against a host whose GRAPH_NOTIFICATION_URL is correct and publicly reachable, and only after the Exchange Application Access Policy is confirmed working (step 3 of test_graph_intake_setup.py passes). Expected: 200 with subscription_id + expires_at. 503 = Graph not configured. 502 = Graph rejected the request (check notification URL / permissions)."
+      }
+    },
+    {
+      "name": "5. Admin - subscription status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/admin/graph/subscription-status",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "admin", "graph", "subscription-status"]
+        },
+        "description": "Read-only. Shows tracked subscriptions with status/expiry/last_error. Safe to call any time."
+      }
+    }
+  ]
+}

@@ -330,27 +330,65 @@ LLM response can't take down the webhook's background task (logged loudly
 instead, since silently skipping a real complaint would be worse than a
 false positive needing human correction).
 
-### Known limitation
+### Attachment content reading (2026-08-17, added after initial build)
 
-Attachment **content** is not analyzed (the external agent reads PDFs/Excel
-files and extracts data buried inside them per `docs/intake-agent-prompt.md`'s
-"PIÈCES JOINTES" section — e.g. "body empty, PDF has everything"). Only
-filenames are passed as context to the LLM. If this mailbox regularly
-receives complaints where the substance is only in an attachment, this will
-under-extract compared to the external agent. Revisit if that turns out to
-matter in practice.
+Originally a known limitation ("only filenames passed as context, no
+attachment content analysis") — closed the same day. New:
+`app/services/attachment_content_extractor.py`:
+- **PDF** → text extracted via `pypdf`, capped at 6000 chars per file
+- **Excel** (`.xlsx`/`.xls`) → all sheet cell values extracted via
+  `openpyxl`, capped similarly
+- **Images** → NOT text-extracted — passed as base64 data-URI content parts
+  directly into the chat completion call (multimodal), so a vision-capable
+  model looks at the actual photo (e.g. a cracked part) rather than reading
+  a text description of it. Capped at 5 images/email.
+- Anything else (Word docs, unhandled types) → filename-only context, same
+  as before — not a regression, just not extended yet.
+
+`classify_and_extract()` now switches its OpenAI message content from a
+plain string to a list of content parts (text + images) only when images
+are present, keeping the common no-image case unchanged.
+
+**Verified 2026-08-17:** an email with a completely **empty body** and one
+PDF attachment containing all the complaint details → correctly extracted
+every field (`customer: VALEO`, `product_line: CHOKE`,
+`quality_issue_warranty: CS2`,
+`potential_avocarbon_process_linked_to_problem: WINDING`, `defects:
+Function`, `avocarbon_plant`/`detected_plant: KUNSHAN`, correct
+`customer_complaint_date`), `missing_fields: []`, and `ai_notes` correctly
+noted the data came from the attachment, not the body.
+
+### Bug found and fixed (2026-08-17): classification failure was silently treated as "not a complaint"
+
+`classify_and_extract()`'s original failure handling returned
+`is_complaint: False` on ANY error (OpenAI down, malformed JSON) — and
+`internal_intake_pipeline.py` treated every `is_complaint: False` result
+identically, marking the message read and moving it to Processed. This
+meant **a real complaint that hit a transient technical error would be
+silently filed away and lost**, indistinguishable from a legitimate
+spam/newsletter skip.
+
+Fixed: `classify_and_extract()` now returns an explicit
+`classification_error: bool` separate from `is_complaint`.
+`handle_new_message()` checks it first and **raises** if true — treated
+exactly like any other pipeline exception (Graph/DB error): message stays
+unread/in Inbox for retry, mailbox is never mutated. Verified with a
+simulated OpenAI outage: confirmed `RuntimeError` raised, `mark_message_read`
+and `move_message_to_folder` both confirmed NOT called.
 
 ### How to test
 
-Verified two ways on 2026-08-17:
+Verified on 2026-08-17:
 - Real mailbox message → correctly classified an internal test email as
   `is_complaint: false` with an accurate `skip_reason`.
-- Synthetic complaint text → correctly extracted `customer: BOSCH`,
-  `product_line: CHOKE`, `defects: Dimensional`,
+- Synthetic complaint text (body only, no attachments) → correctly
+  extracted `customer: BOSCH`, `product_line: CHOKE`, `defects: Dimensional`,
   `potential_avocarbon_process_linked_to_problem: PLASTIC INJECTION`,
   `avocarbon_plant`/`detected_plant: POITIERS` — all exact controlled-vocab
   matches, plus correctly flagged genuinely-missing fields
   (`customer_plant_name`, `quality_issue_warranty`) rather than guessing.
+- Empty-body + PDF-only complaint → see "Attachment content reading" above.
+- Simulated OpenAI outage → see "Bug found and fixed" above.
 
 ```python
 from app.services.graph_email_classify_service import classify_and_extract
