@@ -30,6 +30,22 @@ logger = logging.getLogger(__name__)
 
 _DOWNLOAD_TIMEOUT = 30  # seconds
 
+# Inline images under this size are almost always signature logos/icons, not
+# evidence photos — a phone photo or screenshot pasted into the email body
+# is typically far larger. Only skip inline images at or below this size;
+# larger ones are treated as a normal attachment (stored + fed to the LLM).
+_INLINE_LOGO_MAX_BYTES = 50_000
+
+
+def _is_decorative_inline(meta: dict) -> bool:
+    if not meta.get("is_inline"):
+        return False
+    mime_type = (meta.get("mime_type") or "").lower()
+    if not mime_type.startswith("image/"):
+        return True  # non-image inline parts (rare) are never evidence
+    size = meta.get("size") or 0
+    return size <= _INLINE_LOGO_MAX_BYTES
+
 
 def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
@@ -60,8 +76,9 @@ def process_intake_attachments(
             "sha256": item.get("sha256"),
         }
 
-        # Skip inline images (signatures / logos) by default.
-        if meta["is_inline"]:
+        # Skip small inline images (signatures / logos); larger inline images
+        # (e.g. a photo pasted into the body) are treated as real evidence.
+        if _is_decorative_inline(meta):
             meta["status"] = "skipped_inline"
             results.append(meta)
             continue
@@ -213,7 +230,7 @@ def store_fetched_attachments(
             "sha256": item.get("sha256"),
         }
 
-        if meta["is_inline"]:
+        if _is_decorative_inline(meta):
             meta["status"] = "skipped_inline"
             results.append(meta)
             continue
