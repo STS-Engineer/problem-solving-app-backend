@@ -198,10 +198,13 @@ def stop_scheduler() -> None:
 
 
 def is_scheduler_running() -> bool:
-    """Exposed for /health/ready — confirms scheduler is up AND both jobs are registered."""
+    """Exposed for /health/ready — confirms scheduler is up AND all jobs are registered."""
     if _scheduler is None or not _scheduler.running:
         return False
     job_ids = {job.id for job in _scheduler.get_jobs()}
-    return {"escalation_check", "email_retry", "intake_escalation_check"}.issubset(
-        job_ids
-    )
+    return {
+        "escalation_check",
+        "email_retry",
+        "intake_escalation_check",
+        "graph_subscription_renewal",
+    }.issubset(job_ids)
