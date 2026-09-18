@@ -49,9 +49,25 @@ class EmailOutbox(Base):
         nullable=True,
         index=True,
     )
+    intake_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("email_intake.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
-    # ── Escalation metadata ───────────────────────────────────────────────────
-    escalation_level: Mapped[int] = mapped_column(Integer, nullable=False)
+    # ── Kind discriminator ────────────────────────────────────────────────────
+    # 'escalation' (default, unchanged behavior — subject/body rebuilt from
+    # step_id/complaint_id at retry time) or 'intake' (subject/body_html
+    # below are stored as-built and just re-sent verbatim on retry).
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="escalation")
+
+    # ── Escalation metadata (escalation rows only) ───────────────────────────
+    escalation_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # ── Stored content (intake rows only — escalation rows rebuild at retry) ─
+    subject: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    body_html: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # ── Routing data ──────────────────────────────────────────────────────────
     # Stored at insert time because the complaint state can change before delivery.

@@ -28,6 +28,7 @@ from app.core.config import settings
 from app.core.email import _send_sync
 from app.core.form_options import evaluate_completeness
 from app.models.email_intake import EmailIntake
+from app.models.email_outbox import EmailOutbox
 from app.models.enums import PlantEnum
 from app.models.plant_contacts import PlantContact
 from app.schemas.complaint import ComplaintCreate
@@ -127,6 +128,11 @@ def _build_notification(intake: EmailIntake) -> tuple[str, str]:
           {_row("Missing data", missing)}
         </table>
 
+        <p style="margin:18px 0 0;font-weight:700;color:#1A2332;font-size:13px;">Description</p>
+        <p style="margin:6px 0 0;color:#4A5568;font-size:13px;white-space:pre-wrap;">
+          {ed.get("complaint_description") or "—"}
+        </p>
+
         <div style="margin:22px 0 6px;">
           <a href="{review_url}"
              style="display:inline-block;background:#1A73E8;color:#fff;text-decoration:none;
@@ -219,16 +225,51 @@ def _build_cqe_assignment_email(
     return subject, body_html
 
 
-def _notify(intake: EmailIntake, recipients: list[str]) -> None:
+def _queue_and_send(
+    db: Session, intake: EmailIntake, subject: str, recipients: list[str], body_html: str
+) -> None:
+    """
+    Persists the notification as a retriable email_outbox row (kind='intake')
+    BEFORE attempting delivery, then sends it — so a failed send is tracked
+    and picked up by the same retry_failed_emails scheduler job that already
+    handles escalation emails, instead of being silently dropped after one
+    failed attempt (fire-and-forget was the previous behavior here).
+    """
+    entry = EmailOutbox(
+        kind="intake",
+        intake_id=intake.id,
+        recipients=recipients,
+        cc=None,
+        subject=subject,
+        body_html=body_html,
+        status="pending",
+        attempts=0,
+        next_retry_at=datetime.now(timezone.utc),
+    )
+    db.add(entry)
+    db.flush()
+
+    try:
+        _send_sync(subject=subject, recipients=recipients, body_html=body_html, cc=None)
+        entry.mark_sent()
+        logger.info("intake %s: notified %s (outbox_id=%s)", intake.id, recipients, entry.id)
+    except Exception as exc:
+        entry.mark_failed(str(exc))
+        logger.warning(
+            "intake %s: notification failed, queued for retry (outbox_id=%s): %s",
+            intake.id,
+            entry.id,
+            exc,
+        )
+    db.commit()
+
+
+def _notify(db: Session, intake: EmailIntake, recipients: list[str]) -> None:
     if not recipients:
         logger.error("intake %s: no recipients resolved — notification skipped", intake.id)
         return
     subject, body_html = _build_notification(intake)
-    try:
-        _send_sync(subject=subject, recipients=recipients, body_html=body_html, cc=None)
-        logger.info("intake %s: notified %s", intake.id, recipients)
-    except Exception as exc:  # best-effort — the intake is already stored
-        logger.warning("intake %s: notification failed: %s", intake.id, exc)
+    _queue_and_send(db, intake, subject, recipients, body_html)
 
 
 def _build_followup_notification(
@@ -295,11 +336,7 @@ def _notify_followup(db: Session, intake: EmailIntake) -> None:
         return
 
     subject, body_html = _build_followup_notification(intake, reference)
-    try:
-        _send_sync(subject=subject, recipients=recipients, body_html=body_html, cc=None)
-        logger.info("intake %s: follow-up notified %s", intake.id, recipients)
-    except Exception as exc:  # best-effort — the follow-up is already stored
-        logger.warning("intake %s: follow-up notification failed: %s", intake.id, exc)
+    _queue_and_send(db, intake, subject, recipients, body_html)
 
 
 # ── Public entry point ──────────────────────────────────────────────────────
@@ -436,7 +473,7 @@ class EmailIntakeService:
 
         # ── 4. Notify (plant contacts or fallback) ──────────────────────────
         recipients = _resolve_recipients(db, plant)
-        _notify(intake, recipients)
+        _notify(db, intake, recipients)
         intake.notified_to = recipients
         db.commit()
         db.refresh(intake)
@@ -471,7 +508,7 @@ class EmailIntakeService:
 
         if renotify:
             recipients = _resolve_recipients(db, plant)
-            _notify(intake, recipients)
+            _notify(db, intake, recipients)
             merged = list(intake.notified_to or []) + recipients
             intake.notified_to = PlantContact._dedup(merged)
             db.commit()
@@ -530,20 +567,10 @@ class EmailIntakeService:
                 intake, created=False, url=url, missing_fields=result["missing_fields"]
             )
 
-        try:
-            _send_sync(subject=subject, recipients=[cqe_email], body_html=body, cc=None)
-            logger.info(
-                "intake %s: CQT %s assigned & notified (%s)",
-                intake.id,
-                cqe_email,
-                result["status"],
-            )
-        except Exception as exc:  # best-effort — assignment is already saved
-            logger.warning(
-                "intake %s: CQT assignment saved but notification failed: %s",
-                intake.id,
-                exc,
-            )
+        _queue_and_send(db, intake, subject, [cqe_email], body)
+        logger.info(
+            "intake %s: CQT %s assigned (%s)", intake.id, cqe_email, result["status"]
+        )
 
         db.refresh(intake)
         return intake

@@ -453,7 +453,13 @@ def _attempt_send(
 
 
 def _retry_outbox_entry(db: Session, entry: EmailOutbox) -> None:
-    """Unchanged from original."""
+    """Unchanged from original for escalation rows; intake rows (kind='intake')
+    have no step/complaint to reload or re-check relevance against — they
+    just re-send the stored subject/body_html verbatim."""
+    if entry.kind == "intake":
+        _retry_intake_outbox_entry(db, entry)
+        return
+
     step = (
         db.query(ReportStep)
         .filter(ReportStep.id == entry.step_id)
@@ -540,3 +546,34 @@ def _retry_outbox_entry(db: Session, entry: EmailOutbox) -> None:
                 delay,
                 exc,
             )
+
+
+def _retry_intake_outbox_entry(db: Session, entry: EmailOutbox) -> None:
+    """
+    Re-sends a stored intake notification (new complaint / CQE assignment /
+    follow-up) verbatim — no domain reload needed, unlike escalation rows,
+    since the subject/body were already fully rendered when the entry was
+    queued and don't depend on step due-dates or similar time-sensitive state.
+    """
+    try:
+        _send_email(
+            subject=entry.subject or "(no subject)",
+            recipients=entry.recipients,
+            body_html=entry.body_html or "",
+            cc=entry.cc or None,
+        )
+        entry.mark_sent()
+        logger.info(
+            "✓ Intake notification retry OK (attempt %d) — outbox_id=%s intake_id=%s",
+            entry.attempts + 1,
+            entry.id,
+            entry.intake_id,
+        )
+    except Exception as exc:
+        entry.mark_failed(str(exc))
+        logger.warning(
+            "✗ Intake notification retry failed — outbox_id=%s intake_id=%s | error: %s",
+            entry.id,
+            entry.intake_id,
+            exc,
+        )
