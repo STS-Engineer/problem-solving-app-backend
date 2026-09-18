@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import logging
 import secrets
+import threading
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.email import _send_sync
 from app.models.graph_subscription import GraphSubscription
 from app.services.graph_client import graph_delete, graph_patch, graph_post
 
@@ -80,8 +82,53 @@ def create_subscription(db: Session) -> GraphSubscription:
     return row
 
 
+def _send_subscription_alert(sub: GraphSubscription, reason: str) -> None:
+    """
+    Fire-and-forget email alert (mirrors webhook_service._send_failure_email)
+    so a lapsed/broken mailbox subscription gets noticed immediately instead
+    of silently — the subscription that expired 2026-08-17 went a month
+    without anyone knowing until a manual DB check turned it up.
+    """
+    if not settings.GRAPH_ALERT_EMAILS:
+        return
+
+    subject = "[AVOCarbon] Email intake mailbox subscription problem"
+    body_html = f"""
+    <p>{reason}</p>
+    <table cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:14px">
+      <tr><td><b>Mailbox</b></td><td>{settings.GRAPH_MAILBOX_UPN}</td></tr>
+      <tr><td><b>Subscription ID</b></td><td>{sub.subscription_id}</td></tr>
+      <tr><td><b>Expires at</b></td><td>{sub.expires_at.isoformat() if sub.expires_at else "unknown"}</td></tr>
+      <tr><td><b>Last notification received</b></td><td>
+        {sub.last_notification_at.isoformat() if sub.last_notification_at else "never"}</td></tr>
+    </table>
+    <p style="color:#666;margin-top:12px">
+      New complaint emails sent to this mailbox are NOT being processed until this is fixed.<br>
+      Re-subscribe: <code>POST /admin/graph/subscribe</code> on the backend, then confirm via
+      <code>GET /admin/graph/subscription-status</code>.
+    </p>
+    """
+
+    def _fire() -> None:
+        try:
+            _send_sync(
+                subject=subject,
+                recipients=settings.GRAPH_ALERT_EMAILS,
+                body_html=body_html,
+                cc=None,
+            )
+            logger.info("Graph subscription alert sent for %s", sub.subscription_id)
+        except Exception as exc:
+            logger.error(
+                "Failed to send Graph subscription alert for %s: %s", sub.subscription_id, exc
+            )
+
+    threading.Thread(target=_fire, daemon=True).start()
+
+
 def renew_subscription(db: Session, sub: GraphSubscription) -> None:
     expiration = _expiration()
+    was_already_failing = bool(sub.last_error)
     try:
         graph_patch(
             f"/subscriptions/{sub.subscription_id}",
@@ -91,6 +138,10 @@ def renew_subscription(db: Session, sub: GraphSubscription) -> None:
         sub.last_error = str(exc)[:1000]
         db.commit()
         logger.exception("Failed to renew Graph subscription %s", sub.subscription_id)
+        # Only alert on the first failure, not every retry, to avoid spamming
+        # if Graph/network stays down for a while.
+        if not was_already_failing:
+            _send_subscription_alert(sub, f"Renewal attempt failed: {exc}")
         raise
 
     sub.expires_at = expiration
@@ -99,6 +150,36 @@ def renew_subscription(db: Session, sub: GraphSubscription) -> None:
     sub.last_error = None
     db.commit()
     logger.info("Renewed Graph subscription %s, new expiry %s", sub.subscription_id, expiration)
+
+
+def _flag_lapsed_subscriptions(db: Session) -> None:
+    """
+    Catches a subscription that is still marked 'active' in our DB but has
+    already passed its expires_at without ever being renewed — i.e.
+    renew_expiring_subscriptions should have caught it and didn't (scheduler
+    was down, app restarted, Graph/network was unreachable for a stretch,
+    etc). Marks it 'expired' and alerts once on that transition, rather than
+    leaving it silently active-but-dead like the subscription that lapsed
+    2026-08-17 and wasn't noticed for a month.
+    """
+    now = datetime.now(timezone.utc)
+    lapsed = (
+        db.query(GraphSubscription)
+        .filter(GraphSubscription.status == "active")
+        .filter(GraphSubscription.expires_at < now)
+        .all()
+    )
+    for sub in lapsed:
+        sub.status = "expired"
+        db.commit()
+        logger.error(
+            "Graph subscription %s expired without renewal (expired %s)",
+            sub.subscription_id,
+            sub.expires_at,
+        )
+        _send_subscription_alert(
+            sub, f"Subscription expired at {sub.expires_at.isoformat()} without being renewed."
+        )
 
 
 def renew_expiring_subscriptions(db: Session) -> None:
@@ -116,8 +197,11 @@ def renew_expiring_subscriptions(db: Session) -> None:
         try:
             renew_subscription(db, sub)
         except Exception:
-            # Already logged in renew_subscription; keep going for other rows.
+            # Already logged (and alerted, on first failure) in renew_subscription;
+            # keep going for other rows.
             continue
+
+    _flag_lapsed_subscriptions(db)
 
 
 def delete_subscription(db: Session, sub: GraphSubscription) -> None:

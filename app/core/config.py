@@ -64,6 +64,13 @@ class Settings(BaseSettings):
     # renew a bit earlier than that to leave margin for the renewal job.
     GRAPH_SUBSCRIPTION_MAX_MINUTES: int = 4230
     GRAPH_SUBSCRIPTION_RENEW_MARGIN_MINUTES: int = 60
+    # Comma-separated emails alerted if the mailbox subscription expires
+    # without renewing, or a renewal attempt fails. Leave empty to disable.
+    GRAPH_ALERT_EMAILS_RAW: str = "hayfa.rajhi@avocarbon.com"
+
+    @property
+    def GRAPH_ALERT_EMAILS(self) -> list[str]:
+        return [e.strip() for e in self.GRAPH_ALERT_EMAILS_RAW.split(",") if e.strip()]
 
 
 settings = Settings()
