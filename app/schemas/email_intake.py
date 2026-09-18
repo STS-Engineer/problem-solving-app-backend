@@ -145,6 +145,7 @@ class EmailIntakeListItem(BaseModel):
     missing_fields: List[Any]
     assigned_cqe_email: Optional[str]
     complaint_id: Optional[int]
+    reject_reason: Optional[str] = None
     created_at: datetime
 
     # Pre-complaint escalation state (for the review list badges)
