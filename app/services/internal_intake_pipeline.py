@@ -119,14 +119,26 @@ def handle_new_message(db: Session, message_id: str, *, mutate_mailbox: bool = T
 
     if not result["is_complaint"]:
         logger.info(
-            "internal_intake: message %s classified as NOT a complaint (%s) — skipping",
+            "internal_intake: message %s classified as NOT a complaint (%s) — rejecting",
             message_id,
             result.get("skip_reason"),
+        )
+        rejected = EmailIntakeService.record_rejected(
+            db,
+            source_message_id=message["source_message_id"],
+            conversation_id=message.get("conversation_id"),
+            sender_email=message.get("sender_email"),
+            sender_name=message.get("sender_name"),
+            subject=message.get("subject"),
+            received_at=_parse_received_at(message.get("received_at")),
+            raw_body=message.get("raw_body"),
+            raw_html=message.get("raw_html"),
+            reject_reason=result.get("skip_reason"),
         )
         if mutate_mailbox:
             mark_message_read(message_id)
             move_message_to_folder(message_id)
-        return {"outcome": "skipped", "reason": result.get("skip_reason")}
+        return {"outcome": "rejected", "reason": result.get("skip_reason"), "intake_id": rejected.id}
 
     payload = EmailIntakeCreate(
         source_message_id=message["source_message_id"],

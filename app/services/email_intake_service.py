@@ -487,6 +487,58 @@ class EmailIntakeService:
         return intake, "created"
 
     @staticmethod
+    def record_rejected(
+        db: Session,
+        *,
+        source_message_id: str,
+        conversation_id: Optional[str],
+        sender_email: Optional[str],
+        sender_name: Optional[str],
+        subject: Optional[str],
+        received_at: Optional[datetime],
+        raw_body: Optional[str],
+        raw_html: Optional[str],
+        reject_reason: Optional[str],
+    ) -> EmailIntake:
+        """
+        Classifier decided this email is NOT a genuine complaint (spam,
+        newsletter, internal mail, auto-reply, etc). Kept as an auditable
+        'rejected' row instead of silently discarding it — otherwise a
+        misclassification can never be caught/corrected from the UI, and
+        the 'rejected' status/tab would stay permanently empty. No
+        notification is sent (nobody needs to triage a rejected email).
+        """
+        existing = (
+            db.query(EmailIntake)
+            .filter(EmailIntake.source_message_id == source_message_id)
+            .one_or_none()
+        )
+        if existing:
+            return existing
+
+        intake = EmailIntake(
+            source_message_id=source_message_id,
+            conversation_id=conversation_id,
+            sender_email=sender_email,
+            sender_name=sender_name,
+            subject=subject,
+            received_at=received_at,
+            raw_body=raw_body,
+            raw_html=raw_html,
+            attachments=[],
+            extracted_data={},
+            missing_fields=[],
+            status="rejected",
+            reject_reason=reject_reason,
+        )
+        db.add(intake)
+        db.commit()
+        db.refresh(intake)
+
+        logger.info("intake %s: rejected (reason=%s)", intake.id, reject_reason)
+        return intake
+
+    @staticmethod
     def set_plant(
         db: Session,
         intake_id: int,
