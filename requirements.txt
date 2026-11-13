@@ -26,3 +26,4 @@ reportlab
 numpy
 pypdf
 msal
+psycopg[binary]
