@@ -5,10 +5,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import distinct, extract, func
+from sqlalchemy import and_, distinct, extract, func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.services.complaint_kpis import classification_rows, operational_scope, summarize
 from app.models.complaint import Complaint
 from app.services.dashboard_service import (
     DashboardService,
@@ -138,7 +139,7 @@ def _build_intake_year_filter(year: int):
     # canonical volume/trend anchor as the main /stats endpoint, so this
     # widget's numbers and the year picker agree with the main dashboard.
     col = period_date_column()
-    return (extract("year", col) == year,)
+    return (extract("year", col) == year, *operational_scope(include_cancelled=True))
 
 
 def _build_intake_period_filter(
@@ -175,15 +176,7 @@ def _get_open_complaints_count(
         quarter=quarter,
     )
 
-    return (
-        db.query(func.count(Complaint.id))
-        .filter(
-            *period_filters,
-            Complaint.status.in_(list(OPEN_COMPLAINT_STATUSES)),
-        )
-        .scalar()
-        or 0
-    )
+    return summarize(classification_rows(db, and_(*period_filters)))["open"]
 
 
 @router.get("/available-years")
@@ -197,6 +190,7 @@ def get_available_years(db: Session = Depends(get_db)) -> Dict[str, Any]:
     col = period_date_column()
     years = (
         db.query(distinct(extract("year", col)).label("year"))
+        .filter(*operational_scope(include_cancelled=True))
         .order_by(extract("year", col).desc())
         .all()
     )

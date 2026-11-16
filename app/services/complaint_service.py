@@ -8,6 +8,7 @@ from sqlalchemy import and_, or_, select, func, case
 from sqlalchemy.orm import Session
 
 from app.core.email import _send_sync
+from app.services.complaint_kpis import classification_rows
 from app.models.complaint import Complaint
 from app.models.complaint_audit_log import ComplaintAuditLog
 from app.models.report import Report
@@ -296,10 +297,19 @@ class ComplaintService:
 
         rows = q.order_by(Complaint.created_at.desc()).offset(skip).limit(limit).all()
 
+        classifications = {
+            complaint.id: classification
+            for complaint, classification in classification_rows(
+                db, Complaint.id.in_([row[0].id for row in rows])
+            )
+        } if rows else {}
         results = []
         for complaint, report_id, report_number, first_open, first_open_due_val, fulfilled in rows:
+            classification = classifications[complaint.id]
+            for key, value in classification.items():
+                setattr(complaint, key, value)
             has_report = report_id is not None
-            all_completed = has_report and first_open is None and fulfilled == 8
+            all_completed = classification["kpi_status"] == "closed"
             has_export = all_completed
 
             # ── current_step_code ──────────────────────────────────────────────
