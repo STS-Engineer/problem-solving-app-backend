@@ -714,5 +714,22 @@ In code: `DashboardService.get_dashboard_stats` builds both `base_filter` (volum
 ## Notes for Consumers
 
 - All date-period filters should be treated as report scope controls, not KPI definitions.
-- `total_open` in reporting should mean only `open + in_progress`.
+- Operational `total_open` is based on incomplete D1–D8 steps; see the shared summary definition below.
 - KPI consumers should read dictionary keys exactly as returned by backend payload contracts.
+
+
+## Operational complaint summary (dashboard and list)
+
+- Received = Open + Closed + Cancelled, within the selected intake period and filters.
+- Exclude Frankfurt and historical Monday imports from the operational scope. Keep their records in history; no migration or deletion is needed.
+- Cancelled overrides completion state. It contributes only to Received and Cancelled, and is excluded from performance aggregates and customer rankings before ranking.
+- Closed requires all eight distinct D1–D8 steps to have status `fulfilled`. Stored complaint status alone is not sufficient.
+- Open means at least one of D1–D8 is incomplete or missing. Current step = first incomplete step in D1–D8 order.
+- Open On Time / with Delay compares the current time to that current step's stored deadline (equality is on time).
+- Closed On Time / with Delay compares actual completion to the stored D8 deadline. Use the latest step completion timestamp when all eight timestamps exist, otherwise the recorded closure timestamp.
+- Missing deadlines or completion evidence are reported as timing unavailable, never assumed on time. Show this exception beside the timing subdivisions.
+- Naive database timestamps are interpreted as UTC, consistently with existing complaint-list SLA handling.
+- `kpi_summary` supplies the headline counts; `total_by_plant` supplies identical timing fields per plant, excluding cancelled.
+- `total_complaints` remains the Received total for compatibility. Performance-chart volumes exclude cancelled and may therefore be lower by the Cancelled count.
+- Historical reports with no 8D steps are not classified as operational Open complaints.
+- This change does not modify any original cost, currency, complaint status, deadline or closure date.

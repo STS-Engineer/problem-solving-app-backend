@@ -150,6 +150,9 @@ class ComplaintListItem(BaseModel):
     quality_manager_emails: Optional[List[str]] = None
     plant_manager_email: Optional[str]
     is_overdue:Optional[bool]
+    kpi_eligible: bool = True
+    kpi_status: str = "open"
+    timing_status: Optional[str] = "unknown"
 
     class Config:
         from_attributes = True
