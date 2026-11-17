@@ -268,6 +268,7 @@ class DashboardService:
         plant: Optional[str] = None,
         date_column=None,
         include_cancelled: bool = False,
+        include_history: bool = False,
     ):
         """
         Scope complaints to a reporting period.
@@ -304,7 +305,7 @@ class DashboardService:
                 # ignore the filter (avoids returning unfiltered data on a typo'd plant).
                 filters.append(False)
 
-        filters.extend(operational_scope(include_cancelled=include_cancelled))
+        filters.extend(operational_scope(include_cancelled=include_cancelled, include_history=include_history))
         return and_(*filters)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -962,13 +963,13 @@ class DashboardService:
         def _monthly_counts(year_filter):
             return (
                 db.query(
-                    extract("month", Complaint.complaint_opening_date).label("month"),
+                    extract("month", period_date_column()).label("month"),
                     Complaint.avocarbon_plant,
                     func.count(Complaint.id).label("count"),
                 )
                 .filter(year_filter)
                 .group_by(
-                    extract("month", Complaint.complaint_opening_date),
+                    extract("month", period_date_column()),
                     Complaint.avocarbon_plant,
                 )
                 .all()
@@ -978,7 +979,7 @@ class DashboardService:
         # Target = continuous-improvement goal: 15% fewer than the SAME period of
         # the previous year (target = prev-year actual × 0.85).
         prev_filter = DashboardService._build_filter(
-            year - 1, month, quarter, plant=plant
+            year - 1, month, quarter, plant=plant, include_history=True
         )
         prev_results = _monthly_counts(prev_filter)
 
@@ -986,7 +987,7 @@ class DashboardService:
         # the current month/quarter narrowing) — distinguishes "genuinely zero
         # last year" from "no historical baseline exists yet" so the target line
         # doesn't silently read as 0 when there is nothing to compare against.
-        prev_year_any_filter = DashboardService._build_filter(year - 1, plant=plant)
+        prev_year_any_filter = DashboardService._build_filter(year - 1, plant=plant, include_history=True)
         prev_year_any_results = _monthly_counts(prev_year_any_filter)
         has_prev_year_baseline = {
             p: any(r.avocarbon_plant == p for r in prev_year_any_results)
@@ -1008,7 +1009,8 @@ class DashboardService:
             for p in plants:
                 actual = _count_for(results, m, p)
                 prev_actual = _count_for(prev_results, m, p)
-                target = round(prev_actual * 0.85, 1)
+                has_baseline = has_prev_year_baseline.get(p, False)
+                target = round(prev_actual * 0.85, 2) if has_baseline else 0.0
                 rows.append(
                     {
                         "month": months[m - 1],
@@ -1016,13 +1018,14 @@ class DashboardService:
                         "actual": actual,
                         "target": target,
                         "prev_year_actual": prev_actual,
-                        "delta": round(actual - target, 1),
-                        # No prior-year baseline → any complaint is above target.
-                        "on_target": actual <= target if prev_actual > 0 else actual == 0,
-                        "zero_target_breach": prev_actual == 0 and actual > 0,
-                        # True when the plant has no previous-year data at all, so a
-                        # target of 0 reflects "nothing to compare against" rather
-                        # than a genuine year-over-year improvement goal.
+                        "delta": round(actual - target, 2) if has_baseline else None,
+                        # A missing baseline cannot establish a breach or success.
+                        "on_target": actual <= target if has_baseline else None,
+                        "zero_target_breach": has_baseline and prev_actual == 0 and actual > 0,
+                        # Keep numeric target for legacy report consumers; no_baseline
+                        # means unavailable, and dashboard must not plot its zero sentinel.
+                        # Historical imports may supply the prior-year baseline only.
+                        # They remain excluded from current operational actuals.
                         "no_baseline": not has_prev_year_baseline.get(p, False),
                     }
                 )
