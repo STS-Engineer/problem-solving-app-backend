@@ -32,13 +32,14 @@ def open_8d_condition():
     return and_(Complaint.status != "cancelled", ~completed_8d_condition())
 
 
-def operational_scope(include_cancelled=False):
+def operational_scope(include_cancelled=False, include_history=False):
     from sqlalchemy import or_
     from app.models.complaint import Complaint
     from app.models.enums import PlantEnum
 
     filters = [
-        Complaint.source.is_(None),
+        or_(Complaint.source.is_(None), Complaint.source == "monday_import")
+        if include_history else Complaint.source.is_(None),
         or_(Complaint.avocarbon_plant.is_(None),
             Complaint.avocarbon_plant != PlantEnum.FRANKFURT),
     ]

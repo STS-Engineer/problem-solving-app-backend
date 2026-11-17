@@ -733,3 +733,12 @@ In code: `DashboardService.get_dashboard_stats` builds both `base_filter` (volum
 - `total_complaints` remains the Received total for compatibility. Performance-chart volumes exclude cancelled and may therefore be lower by the Cancelled count.
 - Historical reports with no 8D steps are not classified as operational Open complaints.
 - This change does not modify any original cost, currency, complaint status, deadline or closure date.
+
+
+### Prior-year baseline exception for dashboard targets
+
+Historical Monday imports remain excluded from current operational KPIs. They are valid evidence for the previous-year complaint-volume baseline used by Monthly Actual vs Target. For this baseline only, include normal records and Monday imports from the preceding year; continue to exclude Frankfurt and cancelled records. Group both current actuals and previous-year counts by customer complaint month (opening date is the fallback), consistently with period filtering. Target = previous-year same-month count × 0.85, with two decimal places.
+
+A plant without any preceding-year evidence has `no_baseline=true`; the dashboard displays its target as unavailable, never as a zero goal or a confirmed success/breach. The numeric zero sentinel in the legacy target field is retained for report compatibility. An observed zero month in a year with baseline evidence remains a genuine zero target.
+
+Time to Open 8D measures customer complaint date → 8D opening date and can include complaints still open. Time to Close measures 8D opening date → closure date and includes only completed, noncancelled 8Ds. Plants without completed 8Ds have no closure average; they are not assigned zero days or an on-time result.
