@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from openai import OpenAI, OpenAIError
 from app.core.config import settings
+from app.core.openai_usage import log_openai_usage
 
 logger = logging.getLogger(__name__)
 
@@ -1187,6 +1188,7 @@ class OpenAIClient:
                 response_format={"type": "json_object"},
                 timeout=30,
             )
+            log_openai_usage(response, feature="8d_validation")
             content = response.choices[0].message.content
             logger.info("✅ OpenAI response received (%d chars)", len(content))
             return content

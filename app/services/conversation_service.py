@@ -28,6 +28,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.openai_usage import log_openai_usage
 from app.models.report_step import ReportStep
 from app.models.step_conversation import StepConversation
 from app.models.step_file import StepFile
@@ -851,6 +852,7 @@ class ConversationService:
                     max_completion_tokens=1400,
                     timeout=30,
                 )
+                log_openai_usage(response, feature="8d_chat")
 
                 choice = response.choices[0]
                 message = choice.message
@@ -894,6 +896,7 @@ class ConversationService:
                 max_completion_tokens=1400,
                 timeout=30,
             )
+            log_openai_usage(final, feature="8d_chat")
             # logger.info("******************************")
             # logger.info("final response: %s", final.choices[0].message.content)
             return (final.choices[0].message.content or "").strip()

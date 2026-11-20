@@ -29,6 +29,8 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.core.openai_usage import log_openai_usage
+
 from .kpi_logic import MONTH_LONG, MONTH_SHORT
 
 logger = logging.getLogger(__name__)
@@ -153,6 +155,7 @@ def call_openai_chart_summary(
             model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
             input=f"{_SYSTEM_CONTEXT}\n\n{prompt}",
         )
+        log_openai_usage(response, feature="kpi_summary")
         text = (getattr(response, "output_text", "") or "").strip()
         if not text:
             return None
