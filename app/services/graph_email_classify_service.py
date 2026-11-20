@@ -23,6 +23,7 @@ from openai import OpenAI, OpenAIError
 
 from app.core.config import settings
 from app.core.form_options import CLAIM_TYPES, CUSTOMERS, DEFECTS, PLANTS, PROCESSES, PRODUCT_LINES
+from app.core.openai_usage import log_openai_usage
 from app.services.attachment_content_extractor import build_attachment_context
 
 logger = logging.getLogger(__name__)
@@ -205,6 +206,7 @@ def classify_and_extract(
             max_completion_tokens=settings.OPENAI_MAX_TOKENS,
             timeout=30,
         )
+        log_openai_usage(response, feature="email_intake")
         raw = response.choices[0].message.content.strip()
         raw = re.sub(r"^```[a-z]*\s*", "", raw, flags=re.MULTILINE).strip("` \n")
         result = json.loads(raw)

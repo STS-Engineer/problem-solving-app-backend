@@ -37,6 +37,7 @@ from openai import OpenAI, OpenAIError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.openai_usage import log_openai_usage
 from app.services.conversation_service import _merge_extracted
 
 logger = logging.getLogger(__name__)
@@ -388,6 +389,7 @@ def auto_fill_from_complaint(
             max_completion_tokens=1500,
             timeout=30,
         )
+        log_openai_usage(response, feature="complaint_extraction")
 
         logger.info("system content  %s", _SYSTEM)
         logger.info("****************************")
